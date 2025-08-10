@@ -10,3 +10,13 @@ import { CanvasKitJS } from "canvaskit-js";
 // window.CanvasKit = CanvasKitJS.getInstance();
 
 export const CanvasKit = CanvasKitJS.getInstance();
+
+// import  CanvasKitInit  from "canvaskit-js";
+let cankit: CanvasKitJS = null
+
+// export async function initCan() {
+//     if (!cankit) {
+//         cankit = await CanvasKitInit()
+//     }
+//     return cankit
+// }

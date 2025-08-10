@@ -69,6 +69,7 @@ import {
   ParagraphStyle,
   ParagraphBuilderFactory,
   TextStyle,
+  ParagraphBuilder, Paragraph,
 } from "./Text";
 import { PictureRecorderJS } from "./Picture";
 import { normalizeArray } from "./Core/Values";
@@ -349,6 +350,7 @@ export class CanvasKitJS extends CoreCanvasKit implements ICanvasKit {
   ColorMatrix = ColorMatrixHelpers;
   TextBlob = TextBlobFactory;
 
+  // Paragraph = Paragraph
   // The methods below are specific to canvaskit-js
   MakeImageFromURIAsync(url: string) {
     const img = new window.Image();

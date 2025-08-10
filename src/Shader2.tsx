@@ -11,9 +11,6 @@ import { fitbox, mix, useLoop, useOnDraw } from "./components";
 import { CanvasWASM, useImageWASM } from "./components/CanvasWASM";
 import { useCanvasKitWASM } from "./components/CanvasKitContext";
 import zurich from "./assets/zurich2.jpg";
-import { CanvasKitJS } from "canvaskit-js";
-
-const CanvasKit = CanvasKitJS.getInstance();
 
 const drawShader = (
   image: Image | null,

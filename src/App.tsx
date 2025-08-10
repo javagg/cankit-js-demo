@@ -13,6 +13,13 @@ import { Shader2 } from "./Shader2";
 import { Hello } from "./Hello";
 import { Paragraph } from "./Paragraph";
 import { Paragraph2 } from "./Paragraph2";
+// import { useAsync } from "react-async"
+// import  CanvasKitInit  from "canvaskit-js";
+
+// const initCan = async() => {
+//   const cankit = await CanvasKitInit()
+//   console.log(cankit)
+// }
 
 const strictMode = false;
 const Wrapper = strictMode ? StrictMode : Fragment;
@@ -56,10 +63,12 @@ const Wrapper = strictMode ? StrictMode : Fragment;
 // ]);
 
 const App = () => {
+  // const { data } = useAsync({ promiseFn: initCan })
+
   return (
     <Wrapper>
       <CanvasKitProvider>
-        {/* <Paragraph /> */}
+        <Paragraph />
         {/* <Paragraph2 /> */}
         <Breathe />
         <Glassmorphism/>

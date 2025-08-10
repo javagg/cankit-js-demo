@@ -7,3 +7,4 @@ export * from "./FontMgrFactory";
 export * from "./Font";
 export * from "./ParagraphStyle";
 export * from "./ParagraphBuilderFactory";
+export * from "./ParagraphBuilder";
