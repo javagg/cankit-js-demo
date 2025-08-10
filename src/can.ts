@@ -7,6 +7,6 @@ import { CanvasKitJS } from "canvaskit-js";
 // }
 
 // const CanvasKit = CanvasKitJS.getInstance();
-window.CanvasKit = CanvasKitJS.getInstance();
+// window.CanvasKit = CanvasKitJS.getInstance();
 
 export const CanvasKit = CanvasKitJS.getInstance();

@@ -1,5 +1,6 @@
 import type { Image } from "canvaskit-wasm";
 import { useEffect, useState } from "react";
+import { CanvasKit } from "../can";
 
 export const useImage = (url: string) => {
   const [image, setImage] = useState<Image | null>(null);

@@ -1,6 +1,7 @@
 import type { Rect } from "canvaskit-wasm";
-// import { CanvasKitJS } from "canvaskit-js";
+import { CanvasKitJS } from "canvaskit-js";
 
+const CanvasKit = CanvasKitJS.getInstance();
 const exhaustiveCheck = (a: never): never => {
   throw new Error(`Unknown transformation: ${a}`);
 };

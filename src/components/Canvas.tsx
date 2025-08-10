@@ -6,7 +6,7 @@ import type { CanvasRef } from "./Platform";
 import { useElementLayout } from "./Platform";
 import type { AnimationValue } from "./animations";
 import { startAnimations } from "./animations";
-
+import { CanvasKit } from "../can";
 export interface Info {
   width: number;
   height: number;
