@@ -69,7 +69,7 @@ import {
   ParagraphStyle,
   ParagraphBuilderFactory,
   TextStyle,
-  ParagraphBuilder, Paragraph,
+  Paragraph,
 } from "./Text";
 import { PictureRecorderJS } from "./Picture";
 import { normalizeArray } from "./Core/Values";

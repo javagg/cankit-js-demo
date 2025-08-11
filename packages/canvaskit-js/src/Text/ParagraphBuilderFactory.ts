@@ -8,6 +8,7 @@ import type {
   ShapedLine,
   TypefaceFontProvider,
 } from "canvaskit-wasm";
+import { ParagraphBuilder, ParagraphBuilderJS } from "./ParagraphBuilder";
 
 export const ParagraphBuilderFactory: CKParagraphBuilderFactory = {
   Make: function (
@@ -20,7 +21,7 @@ export const ParagraphBuilderFactory: CKParagraphBuilderFactory = {
     _style: ParagraphStyle,
     _fontSrc: TypefaceFontProvider
   ) {
-    throw new Error("Function not implemented.");
+    return new ParagraphBuilderJS()
   },
   MakeFromFontCollection: function (
     _style: ParagraphStyle,
