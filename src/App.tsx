@@ -69,7 +69,7 @@ const App = () => {
     <Wrapper>
       <CanvasKitProvider>
         <Paragraph />
-        {/* <Paragraph2 /> */}
+        <Paragraph2 />
         <Breathe />
         <Glassmorphism/>
          <Shader />

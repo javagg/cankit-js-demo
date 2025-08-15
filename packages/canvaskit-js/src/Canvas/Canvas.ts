@@ -47,7 +47,7 @@ import { nativeMatrix } from "../Core/Matrix";
 import { PathJS } from "../Path";
 import type { ImageJS } from "../Image";
 import type { ImageFilterJS } from "../ImageFilter";
-import type { FontJS } from "../Text";
+import type { FontJS, ParagraphJS } from "../Text";
 import type { PictureJS } from "../Picture";
 
 export class CanvasJS extends HostObject<"Canvas"> implements CKCanvas {
@@ -275,8 +275,9 @@ export class CanvasJS extends HostObject<"Canvas"> implements CKCanvas {
   drawPaint(paint: PaintJS) {
     this.ctx.draw(new DrawableFill(this.width, this.height), paint.getPaint());
   }
-  drawParagraph(_p: Paragraph, _x: number, _y: number): void {
-    throw new Error("Method not implemented.");
+  drawParagraph(p: Paragraph, x: number, y: number): void {
+    // assert(p.isLaidOut);    console.log(para.isLaidOut)
+    (p as ParagraphJS).draw(this, x, y)
   }
   drawPath(path: PathJS, paint: PaintJS): void {
     this.ctx.drawPath(path.getPath(), paint.getPaint());

@@ -1,25 +1,31 @@
 import type {
-  ParagraphBuilder as CKParagraphBuilder,
-  InputGraphemes,
-  InputLineBreaks,
-  InputWords,
-  Paint,
-  Paragraph as CKParagraph,
-  PlaceholderAlignment,
-  TextBaseline,
-  TextStyle,
-  GlyphInfo,
-  LineMetrics,
-  PositionWithAffinity,
-  RectHeightStyle,
-  RectWidthStyle,
-  RectWithDirection,
-  ShapedLine,
-  URange,
-  ParagraphStyle,
-  TypefaceFontProvider,
+    ParagraphBuilder as CKParagraphBuilder,
+    InputGraphemes,
+    InputLineBreaks,
+    InputWords,
+    Paint,
+    Paragraph as CKParagraph,
+    PlaceholderAlignment,
+    TextBaseline,
+    TextStyle,
+    GlyphInfo,
+    LineMetrics,
+    PositionWithAffinity,
+    RectHeightStyle,
+    RectWidthStyle,
+    RectWithDirection,
+    ShapedLine,
+    URange,
+    ParagraphStyle,
+    TypefaceFontProvider,
+    Canvas,
 } from "canvaskit-wasm";
 import { HostObject } from "../HostObject";
+import { StringBuffer } from "./sb";
+// import { PaintJS } from "../Paint";
+import { LayoutFragment } from "./layout_fragmenter"
+import { PaintJS } from "../Paint";
+import { FontJS } from "./Font";
 
 // export const ParagraphBuilder: CKParagraphBuilder = {
 //     addPlaceholder: function (width?: number, height?: number, alignment?: PlaceholderAlignment, baseline?: TextBaseline, offset?: number): void {
@@ -159,6 +165,8 @@ import { HostObject } from "../HostObject";
 // }
 
 export class ParagraphBuilderJS extends HostObject<"ParagraphBuilder"> implements CKParagraphBuilder {
+    _plainTextBuf = new StringBuffer()
+
     constructor(readonly style: ParagraphStyle, fontSrc: TypefaceFontProvider) {
         super("ParagraphBuilder")
     }
@@ -168,11 +176,12 @@ export class ParagraphBuilderJS extends HostObject<"ParagraphBuilder"> implement
     }
 
     addText(str: string): void {
+        this._plainTextBuf.append(str)
         // throw new Error("Method not implemented.");
     }
     build(): CKParagraph {
         // throw new Error("Method not implemented.");
-        return new ParagraphJS()
+        return new ParagraphJS(this._plainTextBuf.toString())
     }
     setWordsUtf8(words: InputWords): void {
         throw new Error("Method not implemented.");
@@ -207,24 +216,19 @@ export class ParagraphBuilderJS extends HostObject<"ParagraphBuilder"> implement
     reset(): void {
         throw new Error("Method not implemented.");
     }
-    _type: "ParagraphBuilder";
-    delete(): void {
-        throw new Error("Method not implemented.");
-    }
-    deleteLater(): void {
-        throw new Error("Method not implemented.");
-    }
-    isAliasOf(other: any): boolean {
-        throw new Error("Method not implemented.");
-    }
-    isDeleted(): boolean {
-        throw new Error("Method not implemented.");
-    }
 }
 
 export class ParagraphJS extends HostObject<"Paragraph"> implements CKParagraph {
-    constructor() {
+
+    isLaidOut = false;
+    paintService: TextPaintService
+
+    layoutService: TextLayoutService
+
+    constructor(readonly plainText: string) {
         super("Paragraph")
+        this.paintService = new TextPaintService(this)
+        this.layoutService = new TextLayoutService(this)
     }
     didExceedMaxLines(): boolean {
         throw new Error("Method not implemented.");
@@ -284,23 +288,113 @@ export class ParagraphJS extends HostObject<"Paragraph"> implements CKParagraph 
         throw new Error("Method not implemented.");
     }
     layout(width: number): void {
-        throw new Error("Method not implemented.");
+        // throw new Error("Method not implemented.");
+        this.isLaidOut = true
     }
     unresolvedCodepoints(): number[] {
         throw new Error("Method not implemented.");
     }
-    _type: "Paragraph";
-    delete(): void {
-        throw new Error("Method not implemented.");
-    }
-    deleteLater(): void {
-        throw new Error("Method not implemented.");
-    }
-    isAliasOf(other: any): boolean {
-        throw new Error("Method not implemented.");
-    }
-    isDeleted(): boolean {
-        throw new Error("Method not implemented.");
+
+    draw(canvas: Canvas, x: number, y: number) {
+        this.paintService.paint(canvas, x, y)
     }
 
+    get lines() { return this.layoutService.lines }
 }
+
+export class EngineTextStyle {
+
+}
+
+class ParagraphLine {
+
+    _fragments: LayoutFragment[] = []
+
+    get fragments() { return this._fragments }
+}
+
+
+
+export class TextPaintService {
+    constructor(readonly paragraph: ParagraphJS) {
+
+    }
+
+    paint(canvas: Canvas, x: number, y: number) {
+        // Loop through all the lines, for each line, loop through all fragments and
+        // paint them. The fragment objects have enough information to be painted
+        // individually.
+        const paint = new PaintJS();
+        // paint.setColor(CanvasKit.CYAN);
+        const font = new FontJS();
+        console.log("aaahah")
+        canvas.drawText("Hello Roboto", x, y, paint, font);
+        for (const line of this.paragraph.lines) {
+            for (const fragment of line.fragments) {
+                this._paintBackground(canvas, x, y, fragment);
+                this._paintText(canvas, x, y, line, fragment);
+            }
+        }
+    }
+
+    _paintBackground(canvas: Canvas, x: number, y: number, fragment: LayoutFragment) {
+        if (fragment.isPlaceholder) {
+            return;
+        }
+        // Paint the background of the box, if the span has a background.
+        const background = fragment.style.background //as SurfacePaint?;
+        if (background != null) {
+            // final ui.Rect rect = fragment.toPaintingTextBox().toRect();
+            // if (!rect.isEmpty) {
+            //     canvas.drawRect(rect.shift(offset), background.paintData);
+            // }
+        }
+    }
+
+    _paintText(canvas: Canvas, x: number, y: number, line: ParagraphLine, fragment: LayoutFragment) {
+        // There's no text to paint in placeholder spans.
+        if (fragment.isPlaceholder) {
+            return;
+        }
+
+        // Don't paint the text for space-only boxes. This is just an
+        // optimization, it doesn't have any effect on the output.
+        if (fragment.isSpaceOnly) {
+            return;
+        }
+
+        this._prepareCanvasForFragment(canvas, fragment);
+    
+        // const fragmentX = fragment.textDirection! == ui.TextDirection.ltr ? fragment.left : fragment.right;
+
+        // const _x = x + line.left + fragmentX;
+        // const _y = y + line.baseline;
+        // const text = fragment.getText(this.paragraph);
+        const paint = new CanvasKit.Paint();
+        paint.setColor(CanvasKit.CYAN);
+        const font = new CanvasKit.Font();
+        console.log("aaahah")
+        canvas.drawText("Hello Roboto", 10, 50, paint, font);
+        // canvas.drawText(text, _x, _y, fragment.style.paint, fragment.style.font)
+        // canvas.tearDownPaint
+    }
+
+     _prepareCanvasForFragment(canvas: Canvas,  fragment: LayoutFragment) {
+
+     }
+}
+
+export class TextLayoutService {
+
+    lines: ParagraphLine[] = []
+
+    constructor(readonly paragraph: ParagraphJS) {
+
+    }
+
+
+}
+
+export class ParagraphSpan {}
+
+export class PlaceholderSpan extends ParagraphSpan {}

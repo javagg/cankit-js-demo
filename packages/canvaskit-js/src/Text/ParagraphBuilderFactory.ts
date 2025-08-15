@@ -18,10 +18,10 @@ export const ParagraphBuilderFactory: CKParagraphBuilderFactory = {
     throw new Error("Function not implemented.");
   },
   MakeFromFontProvider: function (
-    _style: ParagraphStyle,
-    _fontSrc: TypefaceFontProvider
+    style: ParagraphStyle,
+    fontSrc: TypefaceFontProvider
   ) {
-    return new ParagraphBuilderJS()
+    return new ParagraphBuilderJS(style, fontSrc)
   },
   MakeFromFontCollection: function (
     _style: ParagraphStyle,
