@@ -1,28 +1,493 @@
-import { TextDirection } from "../Core";
+import { GlyphInfo, RectWithDirection, TextDirection, PositionWithAffinity } from "canvaskit-wasm";
+import { TextDirection as  TextDirectionEnums } from "../Core";
 import { TextFragment } from "./fragmenter";
-import { LineBreakType } from "./line_breaker";
-import { EngineTextStyle, ParagraphJS, ParagraphSpan, PlaceholderSpan } from "./ParagraphBuilder"
-import { FragmentFlow } from "./text_direction";
+import { LineBreakFragmenter, LineBreakType } from "./line_breaker";
+import { ParagraphJS, ParagraphSpan, PlaceholderSpan, Spanometer, ParagraphLine} from "./ParagraphBuilder"
+import { BidiFragmenter, FragmentFlow } from "./text_direction";
+import { TextStyle as TextStyleJS } from "./ParagraphStyle";
 
 abstract class _CombinedFragment extends TextFragment {
-
+    
     type: LineBreakType;
-}
-
-export class LayoutFragment extends _CombinedFragment {
-
-
-
-
-    fragmentFlow: FragmentFlow;
 
     span: ParagraphSpan;
 
-    trailingNewlines: number;
+    trailingNewlines:number;
 
-    trailingSpaces : number;
+    trailingSpaces:number;
 
-    get style(): EngineTextStyle {
+    get textDirection() {return this._textDirection;}
+    _textDirection: TextDirection;
+
+    // start mixin _FragmentMetrics 
+    protected _spanometer!: Spanometer;
+    protected _ascent!: number;
+    protected _descent!: number;
+    protected _widthExcludingTrailingSpaces!: number;
+    protected _widthIncludingTrailingSpaces!: number;
+    protected _extraWidthForJustification: number = 0.0;
+
+    /** The rise from the baseline as calculated from the font and style for this text. */
+    get ascent(): number {
+        return this._ascent;
+    }
+
+    /** The drop from the baseline as calculated from the font and style for this text. */
+    get descent(): number {
+        return this._descent;
+    }
+
+    /** The width of the measured text, not including trailing spaces. */
+    get widthExcludingTrailingSpaces(): number {
+        return this._widthExcludingTrailingSpaces;
+    }
+
+    /** The width of the measured text, including any trailing spaces. */
+    get widthIncludingTrailingSpaces(): number {
+        return this._widthIncludingTrailingSpaces + this._extraWidthForJustification;
+    }
+
+    /** The total height as calculated from the font and style for this text. */
+    get height(): number {
+        return this.ascent + this.descent;
+    }
+
+    get widthOfTrailingSpaces(): number {
+        return this.widthIncludingTrailingSpaces - this.widthExcludingTrailingSpaces;
+    }
+
+    /// Set measurement values for the fragment.
+    setMetrics(spanometer: Spanometer, options: {
+        ascent: number;
+        descent: number;
+        widthExcludingTrailingSpaces: number;
+        widthIncludingTrailingSpaces: number;
+    }): void {
+        this._spanometer = spanometer;
+        this._ascent = options.ascent;
+        this._descent = options.descent;
+        this._widthExcludingTrailingSpaces = options.widthExcludingTrailingSpaces;
+        this._widthIncludingTrailingSpaces = options.widthIncludingTrailingSpaces;
+    }
+    
+    // end mixin _FragmentMetrics
+
+    // start mixin _FragmentPosition
+/// Encapsulates positioning of the fragment relative to the line.
+///
+/// The coordinates are all relative to the line it belongs to. For example,
+/// [left] is the distance from the left edge of the line to the left edge of
+/// the fragment.
+///
+/// This is what the various measurements/coordinates look like for a fragment
+/// in an LTR paragraph:
+///
+///          *------------------------line.width-----------------*
+///                            *---width----*
+///          ┌─────────────────┬────────────┬────────────────────┐
+///          │                 │--FRAGMENT--│                    │
+///          └─────────────────┴────────────┴────────────────────┘
+///          *---startOffset---*
+///          *------left-------*
+///          *--------endOffset-------------*
+///          *----------right---------------*
+///
+///
+/// And in an RTL paragraph, [startOffset] and [endOffset] are flipped because
+/// the line starts from the right. Here's what they look like:
+///
+///          *------------------------line.width-----------------*
+///                            *---width----*
+///          ┌─────────────────┬────────────┬────────────────────┐
+///          │                 │--FRAGMENT--│                    │
+///          └─────────────────┴────────────┴────────────────────┘
+///                                         *----startOffset-----*
+///          *------left-------*
+///                            *-----------endOffset-------------*
+///          *----------right---------------*
+///  
+    get startOffset(): number {
+        return this._startOffset;
+    }
+    private _startOffset!: number;
+
+    line: ParagraphLine;
+
+    get endOffset(): number {
+        return this.startOffset + this.widthIncludingTrailingSpaces;
+    }
+
+    get left(): number {
+        return this.line.textDirection === TextDirectionEnums.LTR
+            ? this.startOffset
+            : this.line.width - this.endOffset;
+    }
+
+    get right(): number {
+        return this.line.textDirection === TextDirectionEnums.LTR
+            ? this.endOffset
+            : this.line.width - this.startOffset;
+    }
+
+    setPosition(startOffset: number, textDirection: TextDirection): void {
+        this._startOffset = startOffset;
+        this._textDirection ??= textDirection;
+    }
+
+    justifyTo(paragraphWidth: number): void {
+        if (this.end > this.line.endIndex - this.line.trailingSpaces) return;
+        if (this.trailingSpaces === 0) return;
+
+        const justificationTotal = paragraphWidth - this.line.width;
+        const justificationPerSpace = justificationTotal / this.line.nonTrailingSpaces;
+        this._extraWidthForJustification = justificationPerSpace * this.trailingSpaces;
+    }
+
+    // end mixin _FragmentPosition
+
+
+    // start mixin _FragmentBox
+/// Encapsulates calculations related to the bounding box of the fragment
+/// relative to the paragraph.   
+    get top(): number {
+        return this.line.baseline - this.ascent;
+    }
+
+    get bottom(): number {
+        return this.line.baseline + this.descent;
+    }
+
+    private readonly _textBoxIncludingTrailingSpaces: RectWithDirection /*TextBox*/ = {
+        rect: Float32Array.of(
+            this.line.left + this.left,
+            this.top,
+            this.line.left + this.right,
+            this.bottom
+        ),
+        dir: this.textDirection!
+    };
+
+    /// Whether or not the trailing spaces of this fragment are part of trailing
+    /// spaces of the line containing the fragment.
+    get _isPartOfTrailingSpacesInLine(): boolean {
+        return this.end > this.line.endIndex - this.line.trailingSpaces;
+    }
+
+    /// Returns a [ui.TextBox] for the purpose of painting this fragment.
+    ///
+    /// The coordinates of the resulting [ui.TextBox] are relative to the
+    /// paragraph, not to the line.
+    ///
+    /// Trailing spaces in each line aren't painted on the screen, so they are
+    /// excluded from the resulting text box.
+    toPaintingTextBox(): RectWithDirection /*TextBox*/ {
+        if (this._isPartOfTrailingSpacesInLine) {
+            return this.textDirection === TextDirectionEnums.LTR
+                ? {
+                    rect: Float32Array.of(
+                        this.line.left + this.left,
+                        this.top,
+                        this.line.left + this.right - this.widthOfTrailingSpaces,
+                        this.bottom,
+                    ),
+                    dir: this.textDirection!
+                }
+                : {
+                    rect: Float32Array.of(
+                        this.line.left + this.left + this.widthOfTrailingSpaces,
+                        this.top,
+                        this.line.left + this.right,
+                        this.bottom,
+                    ),
+                    dir: this.textDirection!
+                };
+        }
+        return this._textBoxIncludingTrailingSpaces;
+    }
+
+    /// Returns a [ui.TextBox] representing this fragment.
+    ///
+    /// The coordinates of the resulting [ui.TextBox] are relative to the
+    /// paragraph, not to the line.
+    ///
+    /// As opposed to [toPaintingTextBox], the resulting text box from this method
+    /// includes trailing spaces of the fragment.
+    toTextBox(start?: number, end?: number): RectWithDirection /*TextBox*/ {
+        const start1 = start ?? this.start;
+        const end1 = end ?? this.end;
+
+        if (start1 <= this.start && end1 >= this.end - this.trailingNewlines) {
+            return this._textBoxIncludingTrailingSpaces;
+        }
+        return this._intersect(start1, end1);
+    }
+
+    /// Performs the intersection of this fragment with the range given by [start] and
+    /// [end] indices, and returns a [ui.TextBox] representing that intersection.
+    ///
+    /// The coordinates of the resulting [ui.TextBox] are relative to the
+    /// paragraph, not to the line.
+    private _intersect(start: number, end: number): RectWithDirection /*TextBox*/ {
+        console.assert(start > this.start || end < this.end, '_intersect should only be called when there\'s an actual intersection');
+
+        let before = 0;
+        if (start > this.start) {
+            this._spanometer.currentSpan = this.span;
+            before = this._spanometer.measureRange(this.start, start);
+        }
+
+        let after = 0;
+        if (end < this.end - this.trailingNewlines) {
+            this._spanometer.currentSpan = this.span;
+            after = this._spanometer.measureRange(end, this.end - this.trailingNewlines);
+        }
+
+        let left: number, right: number;
+        if (this.textDirection === TextDirectionEnums.LTR) {
+            // Example: let's say the text is "Loremipsum" and we want to get the box
+            // for "rem". In this case, `before` is the width of "Lo", and `after`
+            // is the width of "ipsum".
+            //
+            // Here's how the measurements/coordinates look like:
+            //
+            //              before         after
+            //              |----|     |----------|
+            //              +---------------------+
+            //              | L o r e m i p s u m |
+            //              +---------------------+
+            //    this.left ^                     ^ this.right
+            left = this.left + before;
+            right = this.right - after;
+        } else {
+            // Example: let's say the text is "txet_werbeH" ("Hebrew_text" flowing from
+            // right to left). Say we want to get the box for "brew". The `before` is
+            // the width of "He", and `after` is the width of "_text".
+            //
+            //                 after           before
+            //              |----------|       |----|
+            //              +-----------------------+
+            //              | t x e t _ w e r b e H |
+            //              +-----------------------+
+            //    this.left ^                       ^ this.right
+            //
+            // Notice how `before` and `after` are reversed in the RTL example. That's
+            // because the text flows from right to left.
+            left = this.left + after;
+            right = this.right - before;
+        }
+
+        // The fragment's left and right edges are relative to the line. In order
+        // to make them relative to the paragraph, we need to add the left edge of
+        // the line.
+        return {
+            rect: Float32Array.of(
+                this.line.left + left,
+                this.top,
+                this.line.left + right,
+                this.bottom,
+            ),
+            dir: this.textDirection!
+        };
+    }
+
+    /// Returns the text position within this fragment's range that's closest to
+    /// the given [x] offset.
+    ///
+    /// The [x] offset is expected to be relative to the left edge of the fragment.
+    getPositionForX(x: number): TextPosition {
+        x = this._makeXDirectionAgnostic(x);
+
+        const startIndex = this.start;
+        const endIndex = this.end - this.trailingNewlines;
+    
+        // Check some special cases to return the result quicker.
+
+        const length = endIndex - startIndex;
+
+        if (length === 0) {
+            return new TextPosition(startIndex);
+        }
+        if (length === 1) {
+           // Find out if `x` is closer to `startIndex` or `endIndex`.
+            const distanceFromStart = x;
+            const distanceFromEnd = this.widthIncludingTrailingSpaces - x;
+            return distanceFromStart < distanceFromEnd
+                ? new TextPosition(startIndex)
+                : new TextPosition(endIndex, TextAffinity.upstream);
+        }
+
+        this._spanometer.currentSpan = this.span;
+        // The resulting `cutoff` is the index of the character where the `x` offset
+        // falls. We should return the text position of either `cutoff` or
+        // `cutoff + 1` depending on which one `x` is closer to.
+        //
+        //   offset x
+        //      ↓
+        // "A B C D E F"
+        //     ↑
+        //   cutoff
+        const cutoff = this._spanometer.forceBreak(
+            startIndex,
+            endIndex,
+            availableWidth: x,
+            allowEmpty: true,
+        );
+
+        if (cutoff == endIndex) {
+            return ui.TextPosition(offset: cutoff, affinity: ui.TextAffinity.upstream);
+        }
+
+        const lowWidth = this._spanometer.measureRange(startIndex, cutoff);
+        const highWidth = this._spanometer.measureRange(startIndex, cutoff + 1);
+
+        // See if `x` is closer to `cutoff` or `cutoff + 1`.
+        if (x - lowWidth < highWidth - x) {
+        // The offset is closer to cutoff.
+            return ui.TextPosition(offset: cutoff);
+        } else {
+        // The offset is closer to cutoff + 1.
+            return ui.TextPosition(offset: cutoff + 1, affinity: ui.TextAffinity.upstream);
+        }
+    }
+
+    /// Transforms the [x] coordinate to be direction-agnostic.
+    ///
+    /// The X (input) is relative to the [left] edge of the fragment, and this
+    /// method returns an X' (output) that's relative to beginning of the text.
+    ///
+    /// Here's how it looks for a fragment with LTR content:
+    ///
+    ///          *------------------------line width------------------*
+    ///                      *-----X (input)
+    ///          ┌───────────┬────────────────────────┬───────────────┐
+    ///          │           │ ---text-direction----> │               │
+    ///          └───────────┴────────────────────────┴───────────────┘
+    ///                      *-----X' (output)
+    ///          *---left----*
+    ///          *---------------right----------------*
+    ///
+    ///
+    /// And here's how it looks for a fragment with RTL content:
+    ///
+    ///          *------------------------line width------------------*
+    ///                      *-----X (input)
+    ///          ┌───────────┬────────────────────────┬───────────────┐
+    ///          │           │ <---text-direction---- │               │
+    ///          └───────────┴────────────────────────┴───────────────┘
+    ///                   (output) X'-----------------*
+    ///          *---left----*
+    ///          *---------------right----------------*
+    ///
+    private _makeXDirectionAgnostic(x: number): number {
+        return this.textDirection === TextDirectionEnums.LTR
+            ? this.widthIncludingTrailingSpaces - x
+            : x;
+    }
+
+
+    // [start, end).map((index) => line.graphemeStarts[index]) gives an ascending
+    // list of UTF16 offsets of graphemes that start in this fragment.
+    //
+    // Returns null if this fragment contains no grapheme starts.
+    private readonly graphemeStartIndexRange: [number, number] | null = this._getBreaksRange();
+
+    private _getBreaksRange(): [number, number] | null {
+        if (this.end === this.start) {
+            return null;
+        }
+        const lineGraphemeBreaks = this.line.graphemeStarts;
+        console.assert(this.end > this.start);
+        console.assert(lineGraphemeBreaks.length > 0);
+
+        const startIndex = this.line.graphemeStartIndexBefore(this.start, 0, lineGraphemeBreaks.length);
+        const endIndex = this.end === this.start + 1
+            ? startIndex + 1
+            : this.line.graphemeStartIndexBefore(this.end - 1, startIndex, lineGraphemeBreaks.length) + 1;
+
+        const firstGraphemeStart = lineGraphemeBreaks[startIndex];
+        return firstGraphemeStart > this.start
+            ? (endIndex === startIndex + 1 ? null : [startIndex + 1, endIndex])
+            : [startIndex, endIndex];
+    }
+
+    /// Whether the first codepoints of this fragment is not a valid grapheme start,
+    /// and belongs in the the previous fragment.
+    ///
+    /// This is the result of a known bug: in rare circumstances, a grapheme is
+    /// split into different fragments. To workaround this we ignore the trailing
+    /// part of the grapheme during hit-testing, by adjusting the leading offset of
+    /// a fragment to the leading edge of the first grapheme start in that fragment.
+    //
+    // TODO(LongCatIsLooong): Grapheme clusters should not be separately even
+    // when they are in different runs. Also document the recommendation to use
+    // U+25CC or U+00A0 for showing nonspacing marks in isolation.
+    get hasLeadingBrokenGrapheme(): boolean {
+        const graphemeStartIndexRangeStart = this.graphemeStartIndexRange?.[0];
+        return graphemeStartIndexRangeStart === null ||
+            this.line.graphemeStarts[graphemeStartIndexRangeStart] !== this.start;
+    }
+
+
+    /// Returns the GlyphInfo within the range [line.graphemeStarts[startIndex], line.graphemeStarts[endIndex]),
+    /// that's visually closeset to the given horizontal offset `x` (in the paragraph's coordinates).
+    private _getClosestCharacterInRange(x: number, startIndex: number, endIndex: number): GlyphInfo {
+        const graphemeStartIndices = this.line.graphemeStarts;
+        const fullRange = new TextRange(graphemeStartIndices[startIndex], graphemeStartIndices[endIndex]);
+        const fullBox = this.toTextBox({ start: fullRange.start, end: fullRange.end });
+
+        if (startIndex + 1 === endIndex) {
+            return new GlyphInfo(fullBox.toRect(), fullRange, fullBox.direction);
+        }
+        console.assert(startIndex + 1 < endIndex);
+
+        const { left, right } = fullBox;
+
+        if (left < x && x < right) {
+            const midIndex = Math.floor((startIndex + endIndex) / 2);
+            const firstHalf = this._getClosestCharacterInRange(x, startIndex, midIndex);
+            if (firstHalf.graphemeClusterLayoutBounds.left < x && x < firstHalf.graphemeClusterLayoutBounds.right) {
+                return firstHalf;
+            }
+            const secondHalf = this._getClosestCharacterInRange(x, midIndex, endIndex);
+            if (secondHalf.graphemeClusterLayoutBounds.left < x && x < secondHalf.graphemeClusterLayoutBounds.right) {
+                return secondHalf;
+            }
+            const distanceToFirst = Math.abs(x - Math.max(Math.min(x, firstHalf.graphemeClusterLayoutBounds.right), firstHalf.graphemeClusterLayoutBounds.left));
+            const distanceToSecond = Math.abs(x - Math.max(Math.min(x, secondHalf.graphemeClusterLayoutBounds.right), secondHalf.graphemeClusterLayoutBounds.left));
+            return distanceToFirst > distanceToSecond ? firstHalf : secondHalf;
+        }
+
+        const range = (fullBox.direction === TextDirection.LTR && x <= left) ||
+            (fullBox.direction === TextDirection.LTR && x > left)
+            ? new TextRange(graphemeStartIndices[startIndex], graphemeStartIndices[startIndex + 1])
+            : new TextRange(graphemeStartIndices[endIndex - 1], graphemeStartIndices[endIndex]);
+
+        console.assert(!range.isCollapsed);
+        const box = this.toTextBox({ start: range.start, end: range.end });
+        return new GlyphInfo(box.toRect(), range, box.direction);
+    }
+
+    /// Returns the GlyphInfo of the character in the fragment that is closest to
+    /// the given offset x.
+    getClosestCharacterBox(x: number): GlyphInfo {
+        console.assert(this.end > this.start);
+        console.assert(this.graphemeStartIndexRange !== null);
+
+        // The non-null assertion is safe here because this method is only called by
+        // LayoutService.getClosestGlyphInfo which checks this fragment has at least
+        // one grapheme start before calling this method.
+        const [rangeStart, rangeEnd] = this.graphemeStartIndexRange!;
+        return this._getClosestCharacterInRange(x, rangeStart, rangeEnd);
+    }
+    // end mixin _FragmentBox 
+}
+
+
+export class LayoutFragment extends _CombinedFragment {
+
+    fragmentFlow: FragmentFlow;
+
+    get style(): TextStyleJS {
         return  this.span.style;
     }
 
@@ -62,6 +527,94 @@ export class LayoutFragment extends _CombinedFragment {
 
     toString(): string {
         return '$LayoutFragment($start, $end, $type, $textDirection)';
+    }
+
+}
+
+/**
+ * Splits text into measurable fragments.
+ */
+export class LayoutFragmenter {
+    private readonly _text: string;
+    private readonly _spans: ParagraphSpan[];
+
+    constructor(text: string, spans: ParagraphSpan[]) {
+        this._text = text;
+        this._spans = spans;
+    }
+
+    /**
+     * Creates fragments from the text and spans.
+     */
+    fragment(): LayoutFragment[] {
+        const fragments: LayoutFragment[] = [];
+        let fragmentStart = 0;
+
+        // Initialize fragment iterators
+        const lineBreakIterator = new LineBreakFragmenter(this._text).fragment()[Symbol.iterator]();
+        let lineBreakNext = lineBreakIterator.next();
+        const bidiIterator = new BidiFragmenter(this._text).fragment()[Symbol.iterator]();
+        let bidiNext = bidiIterator.next();
+        const spanIterator = this._spans[Symbol.iterator]();
+        let spanNext = spanIterator.next();
+
+        // Current fragments
+        let currentLineBreak = lineBreakNext.value;
+        let currentBidi = bidiNext.value;
+        let currentSpan = spanNext.value;
+
+        while (true) {
+            // Calculate fragment end based on the smallest end position
+            const fragmentEnd = Math.min(
+                currentLineBreak.end,
+                Math.min(currentBidi.end, currentSpan.end)
+            );
+
+            // Calculate line break properties
+            const distanceFromLineBreak = currentLineBreak.end - fragmentEnd;
+            const lineBreakType = distanceFromLineBreak === 0
+                ? currentLineBreak.type
+                : LineBreakType.prohibited;
+
+            // Calculate trailing whitespace
+            const trailingNewlines = currentLineBreak.trailingNewlines - distanceFromLineBreak;
+            const trailingSpaces = currentLineBreak.trailingSpaces - distanceFromLineBreak;
+            const fragmentLength = fragmentEnd - fragmentStart;
+
+            // Add new fragment
+            fragments.push(new LayoutFragment(
+                fragmentStart,
+                fragmentEnd,
+                lineBreakType,
+                currentBidi.textDirection,
+                currentBidi.fragmentFlow,
+                currentSpan,
+                clampInt(trailingNewlines, 0, fragmentLength),
+                clampInt(trailingSpaces, 0, fragmentLength)
+            ));
+
+            fragmentStart = fragmentEnd;
+
+            // Move iterators if needed
+            let moved = false;
+            if (currentLineBreak.end === fragmentEnd && !(lineBreakNext = lineBreakIterator.next()).done) {
+                currentLineBreak = lineBreakNext.value;
+                moved = true;
+            }
+            if (currentBidi.end === fragmentEnd && !(bidiNext = bidiIterator.next()).done) {
+                currentBidi = bidiNext.value;
+                moved = true;
+            }
+            if (currentSpan.end === fragmentEnd && !(spanNext = spanIterator.next()).done) {
+                currentSpan = spanNext.value;
+                moved = true;
+            }
+
+            // Exit if no more fragments
+            if (!moved) break;
+        }
+
+        return fragments;
     }
 }
 

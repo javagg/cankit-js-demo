@@ -26,7 +26,7 @@ export function measureSubstring(
     text: string,
     start: number,
     end: number,
-   letterSpacing?: number,
+    letterSpacing?: number,
 ): number {
     if (start < 0 || start > end || end > text.length) {
         throw new Error('Invalid start or end index');

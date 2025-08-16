@@ -72,11 +72,7 @@ export class StringBuffer {
         return this;
     }
 
-    /**
-     * 获取当前缓冲区中所有字符串拼接后的总长度。
-     * @returns {number} 字符总数。
-     */
-    length() {
+    get length() {
         return this._length;
     }
 
