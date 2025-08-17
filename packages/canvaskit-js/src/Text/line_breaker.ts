@@ -4,7 +4,7 @@ import { TextFragmenter, TextFragment } from './fragmenter';
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import { UnicodePropertyLookup } from './unicode_range';
+import { getCodePoint, UnicodePropertyLookup } from './unicode_range';
 
 /**
  * Line break properties as defined in UAX #14.
@@ -114,109 +114,10 @@ export enum LineBreakType {
     endOfText,
 }
 
-// /**
-//  * Represents a line break opportunity in text.
-//  */
-// export interface LineBreak {
-//     position: number;
-//     type: LineBreakType;
-// }
-
-// /**
-//  * Implements the line breaking algorithm as defined in UAX #14.
-//  * 
-//  * See: https://www.unicode.org/reports/tr14
-//  */
-// export class LineBreaker {
-//     private _position = 0;
-
-//     constructor(private readonly text: string) { }
-
-//     /**
-//      * Returns the next line break in the text.
-//      * 
-//      * Returns null if there are no more line breaks.
-//      */
-//     nextBreak(): LineBreak | null {
-//         if (this._position >= this.text.length) {
-//             return null;
-//         }
-
-//         // Look for the next break opportunity
-//         while (this._position < this.text.length) {
-//             const breakType = this._getBreakType(this._position);
-//             if (breakType !== LineBreakType.prohibited) {
-//                 const breakPosition = this._position;
-//                 this._position++;
-//                 return { position: breakPosition, type: breakType };
-//             }
-//             this._position++;
-//         }
-
-//         // Always break at the end of text
-//         return {
-//             position: this.text.length,
-//             type: LineBreakType.endOfText,
-//         };
-//     }
-
-//     /**
-//      * Determines the type of break at the given position.
-//      */
-//     private _getBreakType(position: number): LineBreakType {
-//         // Break at the start of text
-//         if (position <= 0) {
-//             return LineBreakType.opportunity;
-//         }
-
-//         // Break at the end of text
-//         if (position >= this.text.length) {
-//             return LineBreakType.endOfText;
-//         }
-
-//         const propertyBefore = lineLookup.find(this.text, position - 1);
-//         const propertyAfter = lineLookup.find(this.text, position);
-
-//         // Mandatory break after newline
-//         if (propertyBefore === LineCharProperty.BK ||
-//             propertyBefore === LineCharProperty.CR ||
-//             propertyBefore === LineCharProperty.LF ||
-//             propertyBefore === LineCharProperty.NL) {
-//             return LineBreakType.mandatory;
-//         }
-
-//         // Don't break between CR and LF
-//         if (propertyBefore === LineCharProperty.CR &&
-//             propertyAfter === LineCharProperty.LF) {
-//             return LineBreakType.prohibited;
-//         }
-
-//         // Don't break before most characters
-//         if (propertyAfter === LineCharProperty.GL ||
-//             propertyAfter === LineCharProperty.WJ ||
-//             propertyAfter === LineCharProperty.CL ||
-//             propertyAfter === LineCharProperty.CP ||
-//             propertyAfter === LineCharProperty.EX ||
-//             propertyAfter === LineCharProperty.IS ||
-//             propertyAfter === LineCharProperty.SY) {
-//             return LineBreakType.prohibited;
-//         }
-
-//         // Don't break after spaces
-//         if (propertyBefore === LineCharProperty.SP ||
-//             propertyBefore === LineCharProperty.ZW) {
-//             return LineBreakType.prohibited;
-//         }
-
-//         // Break opportunity by default
-//         return LineBreakType.opportunity;
-//     }
-// }
-
 /**
  * Splits text into fragments based on line breaks.
  */
-export class LineBreakFragmenter extends TextFragmenter {
+export abstract class LineBreakFragmenter extends TextFragmenter {
     static create(text: string): LineBreakFragmenter {
         // if (Intl.v8BreakIterator != null) {
         //     return new V8LineBreakFragmenter(text);
@@ -224,9 +125,7 @@ export class LineBreakFragmenter extends TextFragmenter {
         return new FWLineBreakFragmenter(text);
     }
 
-    fragment(): LineBreakFragment[] {
-        throw new Error('Method not implemented.');
-    }
+    abstract fragment(): LineBreakFragment[]
 }
 
 /**
@@ -238,30 +137,9 @@ export class FWLineBreakFragmenter extends TextFragmenter {
     }
 
     fragment(): LineBreakFragment[] {
-        return computeLineBreakFragments(super.text);
+        return computeLineBreakFragments(this.text);
     }
 }
-
-/**
- * An implementation of LineBreakFragmenter that uses V8's
- * v8BreakIterator API to find line breaks in the given text.
- */
-// export class V8LineBreakFragmenter extends LineBreakFragmenter {
-//     private readonly _v8BreakIterator: DomV8BreakIterator;
-
-//     constructor(text: string) {
-//         super(text);
-//         this._v8BreakIterator = createV8BreakIterator();
-//     }
-
-//     fragment(): LineBreakFragment[] {
-//         return breakLinesUsingV8BreakIterator(
-//             this.text,
-//             this.text as any, // toJS
-//             this._v8BreakIterator
-//         );
-//     }
-// }
 
 export class LineBreakFragment extends TextFragment {
     constructor(
@@ -273,6 +151,7 @@ export class LineBreakFragment extends TextFragment {
     ) {
         super(start, end);
     }
+
     get hashCode(): number {
         throw new Error("need implement")
     }
@@ -280,9 +159,52 @@ export class LineBreakFragment extends TextFragment {
     compare(other: LineBreakFragment): boolean {
         throw new Error("need implement")
     }
+
     toString(): string {
-        return `LineBreakFragment(${super.start}, ${super.end}, ${this.type})`;
+        return `LineBreakFragment(${this.start}, ${this.end}, ${this.type})`;
     }
+}
+
+function _isHardBreak(prop: LineCharProperty | null | undefined): boolean {
+    // No need to check for NL because it's already normalized to BK.
+    return prop === LineCharProperty.LF || prop === LineCharProperty.BK;
+}
+
+
+function _isALorHL(prop: LineCharProperty | null | undefined): boolean {
+    return prop === LineCharProperty.AL || prop === LineCharProperty.HL;
+}
+
+/// Whether the given property is part of a Korean Syllable block.
+///
+/// See:
+/// - https://unicode.org/reports/tr14/tr14-45.html#LB27
+function _isKoreanSyllable(prop: LineCharProperty | null | undefined): boolean {
+    return [
+        LineCharProperty.JL,
+        LineCharProperty.JV,
+        LineCharProperty.JT,
+        LineCharProperty.H2,
+        LineCharProperty.H3,
+    ].includes(prop as LineCharProperty);
+}
+
+/// Whether the given char code has an Eastern Asian width property of F, W or H.
+///
+/// See:
+/// - https://www.unicode.org/reports/tr14/tr14-45.html#LB30
+/// - https://www.unicode.org/Public/13.0.0/ucd/EastAsianWidth.txt
+function _hasEastAsianWidthFWH(charCode: number): boolean {
+    return (
+        charCode === 0x2329 ||
+        (charCode >= 0x3008 && charCode <= 0x301d) ||
+        (charCode >= 0xfe17 && charCode <= 0xff62)
+    );
+}
+
+
+function _isSurrogatePair(codePoint: number | null | undefined): boolean {
+    return codePoint != null && codePoint > 0xffff;
 }
 
 /// Finds the next line break in the given [text] starting from [index].
@@ -303,135 +225,534 @@ export class LineBreakFragment extends TextFragment {
 ///
 /// * https://www.unicode.org/reports/tr14/tr14-45.html#Algorithm
 /// * https://www.unicode.org/Public/11.0.0/ucd/LineBreak.txt
-/**
- * Computes line break fragments for the given text using Flutter Web's
- * implementation of the line breaking algorithm.
- */
 function computeLineBreakFragments(text: string): LineBreakFragment[] {
     const fragments: LineBreakFragment[] = [];
-    const breaker = new LineBreaker(text);
-    let start = 0;
-    let lastType = LineBreakType.prohibited;
 
-    while (true) {
-        const breakpoint = breaker.nextBreak();
-        if (!breakpoint) break;
+    let prev2: LineCharProperty | undefined = undefined;
+    let prev1: LineCharProperty | undefined = undefined;
 
-        const end = breakpoint.position;
-        if (end > start) {
-            // Count trailing newlines and spaces
-            let trailingNewlines = 0;
-            let trailingSpaces = 0;
+    let codePoint = getCodePoint(text, 0);
+    let curr = lineLookup.findForChar(codePoint);
 
-            for (let i = end - 1; i >= start; i--) {
-                const charCode = text.charCodeAt(i);
-                if (_kNewlines.has(charCode)) {
-                    trailingNewlines++;
-                } else if (_kSpaces.has(charCode)) {
-                    trailingSpaces++;
-                } else {
-                    break;
-                }
-            }
+    // When there's a sequence of combining marks, this variable contains the base
+    // property i.e. the property of the character preceding the sequence.
+    let baseOfCombiningMarks = LineCharProperty.AL;
 
-            fragments.push(new LineBreakFragment(
-                start,
-                end,
-                lastType,
-                trailingNewlines,
-                trailingSpaces
-            ));
+    let index = 0;
+    let trailingNewlines = 0;
+    let trailingSpaces = 0;
+
+    let fragmentStart = 0;
+
+
+    function setBreak(type: LineBreakType, debugRuleNumber: number): void {
+        const fragmentEnd = type === LineBreakType.endOfText ? text.length : index;
+        console.assert(fragmentEnd >= fragmentStart, 'Fragment end must not be before start');
+
+        // Debug: uncomment to trace
+        // console.log(`{${fragmentStart}:${fragmentEnd}} [${debugRuleNumber}] -- ${type}`);
+
+        if (prev1 === LineCharProperty.SP) {
+            trailingSpaces++;
+        } else if (_isHardBreak(prev1) || prev1 === LineCharProperty.CR) {
+            trailingNewlines++;
+            trailingSpaces++; // newline also counts as space
         }
 
-        start = end;
-        lastType = breakpoint.type;
-
-        if (breakpoint.type === LineBreakType.endOfText) {
-            break;
+        if (type === LineBreakType.prohibited) {
+            return;
         }
+
+        fragments.push(new LineBreakFragment(
+            fragmentStart,
+            fragmentEnd,
+            type,
+            trailingNewlines,
+            trailingSpaces,
+        ));
+
+        fragmentStart = index;
+
+        // Reset trailing spaces/newlines counter after a new fragment.
+        trailingNewlines = 0;
+        trailingSpaces = 0;
+
+        prev1 = prev2 = undefined;
     }
+
+    // Never break at the start of text.
+    // LB2: sot ×
+    setBreak(LineBreakType.prohibited, 2);
+
+    // Never break at the start of text.
+    // LB2: sot ×
+    //
+    // Skip index 0 because a line break can't exist at the start of text.
+    index++;
+
+    let regionalIndicatorCount = 0;
+
+    // We need to go until `text.length` in order to handle the case where the
+    // paragraph ends with a hard break. In this case, there will be an empty line
+    // at the end.
+    for (; index <= text.length; index++) {
+        prev2 = prev1;
+        prev1 = curr;
+
+        if (_isSurrogatePair(codePoint)) {
+            // Can't break in the middle of a surrogate pair.
+            setBreak(LineBreakType.prohibited, -1);
+            // Advance `index` one extra step to skip the tail of the surrogate pair.
+            index++; // Skip low surrogate
+        }
+
+        codePoint = getCodePoint(text, index);
+        curr = lineLookup.findForChar(codePoint);
+
+        // Keep count of the RI (regional indicator) sequence.
+        if (prev1 === LineCharProperty.RI) {
+            regionalIndicatorCount++;
+        } else {
+            regionalIndicatorCount = 0;
+        }
+
+        // Always break after hard line breaks.
+        // LB4: BK !
+        //
+        // Treat CR followed by LF, as well as CR, LF, and NL as hard line breaks.
+        // LB5: LF !
+        //      NL !
+        if (_isHardBreak(prev1)) {
+            setBreak(LineBreakType.mandatory, 5);
+            continue;
+        }
+
+        if (prev1 === LineCharProperty.CR) {
+            if (curr === LineCharProperty.LF) {
+                // LB5: CR × LF
+                setBreak(LineBreakType.prohibited, 5); // CR × LF
+            } else {
+                // LB5: CR !
+                setBreak(LineBreakType.mandatory, 5); // CR !
+            }
+            continue;
+        }
+
+        // Do not break before hard line breaks.
+        // LB6: × ( BK | CR | LF | NL )
+        if (_isHardBreak(curr) || curr === LineCharProperty.CR) {
+            setBreak(LineBreakType.prohibited, 6);
+            continue;
+        }
+
+        if (index >= text.length) break;
+
+        // Do not break before spaces or zero width space.
+        // LB7: × SP
+        //      × ZW
+        if (curr === LineCharProperty.SP || curr === LineCharProperty.ZW) {
+            setBreak(LineBreakType.prohibited, 7);
+            continue;
+        }
+
+        // LB18: SP ÷
+        if (prev1 === LineCharProperty.SP) {
+            setBreak(LineBreakType.opportunity, 18);
+            continue;
+        }
+
+        // Break after spaces.
+        // LB18: SP ÷
+        if (prev1 === LineCharProperty.ZW) {
+            setBreak(LineBreakType.opportunity, 8);
+            continue;
+        }
+
+        // Break before any character following a zero-width space, even if one or
+        // more spaces intervene.
+        // LB8: ZW SP* ÷
+        if (prev1 === LineCharProperty.ZWJ) {
+            setBreak(LineBreakType.prohibited, 8);
+            continue;
+        }
+
+        // Establish the base for the sequences of combining marks.
+        if (prev1 !== LineCharProperty.CM && prev1 !== LineCharProperty.ZWJ) {
+            baseOfCombiningMarks = prev1 ?? LineCharProperty.AL;
+        }
+
+        // Do not break a combining character sequence; treat it as if it has the
+        // line breaking class of the base character in all of the following rules.
+        // Treat ZWJ as if it were CM.
+        if (curr === LineCharProperty.CM || curr === LineCharProperty.ZWJ) {
+            if (baseOfCombiningMarks === LineCharProperty.SP) {
+                // LB10: Treat any remaining combining mark or ZWJ as AL.
+                curr = LineCharProperty.AL; // LB10
+            } else {
+                // LB9: Treat X (CM | ZWJ)* as if it were X
+                //      where X is any line break class except BK, NL, LF, CR, SP, or ZW.
+                curr = baseOfCombiningMarks; // LB9
+                if (curr === LineCharProperty.RI) {
+                    // Prevent the previous RI from being double-counted.
+                    regionalIndicatorCount--;
+                }
+                setBreak(LineBreakType.prohibited, 9);
+                continue;
+            }
+        }
+
+        // In certain situations (e.g. CM immediately following a hard break), we
+        // need to also check if the previous character was CM/ZWJ. That's because
+        // hard breaks caused the previous iteration to short-circuit, which leads
+        // to `baseOfCombiningMarks` not being updated properly.
+        if (prev1 === LineCharProperty.CM || prev1 === LineCharProperty.ZWJ) {
+            prev1 = baseOfCombiningMarks;
+        }
+
+        // Do not break before or after Word joiner and related characters.
+        // LB11: × WJ
+        //       WJ ×
+        if (curr === LineCharProperty.WJ || prev1 === LineCharProperty.WJ) {
+            setBreak(LineBreakType.prohibited, 11);
+            continue;
+        }
+
+        // Do not break after NBSP and related characters.
+        // LB12: GL ×
+        if (prev1 === LineCharProperty.GL) {
+            setBreak(LineBreakType.prohibited, 12);
+            continue;
+        }
+
+        // Do not break before NBSP and related characters, except after spaces and
+        // hyphens.
+        // LB12a: [^SP BA HY] × GL
+        if (
+            ![LineCharProperty.SP, LineCharProperty.BA, LineCharProperty.HY].includes(prev1) &&
+            curr === LineCharProperty.GL
+        ) {
+            setBreak(LineBreakType.prohibited, 12);
+            continue;
+        }
+
+        // Do not break before ‘]’ or ‘!’ or ‘;’ or ‘/’, even after spaces.
+        // LB13: × CL
+        //       × CP
+        //       × EX
+        //       × IS
+        //       × SY
+        //
+        // The above is a quote from unicode.org. In our implementation, we did the
+        // following modification: When there are spaces present, we consider it a
+        // line break opportunity.
+        //
+        // We made this modification to match the browser behavior.
+        if (prev1 !== LineCharProperty.SP &&
+            [
+                LineCharProperty.CL,
+                LineCharProperty.CP,
+                LineCharProperty.EX,
+                LineCharProperty.IS,
+                LineCharProperty.SY,
+            ].includes(curr)
+        ) {
+            setBreak(LineBreakType.prohibited, 13);
+            continue;
+        }
+
+        // Do not break after ‘[’, even after spaces.
+        // LB14: OP SP* ×
+        //
+        // The above is a quote from unicode.org. In our implementation, we did the
+        // following modification: Allow breaks when there are spaces.
+        //
+        // We made this modification to match the browser behavior.
+        if (prev1 === LineCharProperty.OP) {
+            setBreak(LineBreakType.prohibited, 14);
+            continue;
+        }
+
+        // Do not break within ‘”[’, even with intervening spaces.
+        // LB15: QU SP* × OP
+        //
+        // The above is a quote from unicode.org. In our implementation, we did the
+        // following modification: Allow breaks when there are spaces.
+        //
+        // We made this modification to match the browser behavior.
+        if (prev1 === LineCharProperty.QU && curr === LineCharProperty.OP) {
+            setBreak(LineBreakType.prohibited, 15);
+            continue;
+        }
+
+        // Do not break between closing punctuation and a nonstarter, even with
+        // intervening spaces.
+        // LB16: (CL | CP) SP* × NS
+        //
+        // The above is a quote from unicode.org. In our implementation, we did the
+        // following modification: Allow breaks when there are spaces.
+        //
+        // We made this modification to match the browser behavior.
+        if (
+            (prev1 === LineCharProperty.CL || prev1 === LineCharProperty.CP) &&
+            curr === LineCharProperty.NS
+        ) {
+            setBreak(LineBreakType.prohibited, 16);
+            continue;
+        }
+
+        // Do not break within ‘——’, even with intervening spaces.
+        // LB17: B2 SP* × B2
+        //
+        // The above is a quote from unicode.org. In our implementation, we did the
+        // following modification: Allow breaks when there are spaces.
+        //
+        // We made this modification to match the browser behavior.
+        if (prev1 === LineCharProperty.B2 && curr === LineCharProperty.B2) {
+            setBreak(LineBreakType.prohibited, 17);
+            continue;
+        }
+
+        // Do not break before or after quotation marks, such as ‘”’.
+        // LB19: × QU
+        //       QU ×
+        if (prev1 === LineCharProperty.QU || curr === LineCharProperty.QU) {
+            setBreak(LineBreakType.prohibited, 19);
+            continue;
+        }
+
+        // Break before and after unresolved CB.
+        // LB20: ÷ CB
+        //       CB ÷
+        //
+        // In flutter web, we use this as an object-replacement character for
+        // placeholders.
+        if (prev1 === LineCharProperty.CB || curr === LineCharProperty.CB) {
+            setBreak(LineBreakType.opportunity, 20);
+            continue;
+        }
+
+        // Do not break before hyphen-minus, other hyphens, fixed-width spaces,
+        // small kana, and other non-starters, or after acute accents.
+        // LB21: × BA
+        //       × HY
+        //       × NS
+        //       BB ×
+        if (
+            curr === LineCharProperty.BA ||
+            curr === LineCharProperty.HY ||
+            curr === LineCharProperty.NS ||
+            prev1 === LineCharProperty.BB
+        ) {
+            setBreak(LineBreakType.prohibited, 21);
+            continue;
+        }
+
+        // Don't break after Hebrew + Hyphen.
+        // LB21a: HL (HY | BA) ×
+        if (
+            prev2 === LineCharProperty.HL &&
+            (prev1 === LineCharProperty.HY || prev1 === LineCharProperty.BA)
+        ) {
+            setBreak(LineBreakType.prohibited, 21);
+            continue;
+        }
+
+        // Don’t break between Solidus and Hebrew letters.
+        // LB21b: SY × HL
+        if (prev1 === LineCharProperty.SY && curr === LineCharProperty.HL) {
+            setBreak(LineBreakType.prohibited, 21);
+            continue;
+        }
+
+        // Do not break before ellipses.
+        // LB22: × IN
+        if (curr === LineCharProperty.IN) {
+            setBreak(LineBreakType.prohibited, 22);
+            continue;
+        }
+
+        // Do not break between digits and letters.
+        // LB23: (AL | HL) × NU
+        //       NU × (AL | HL)
+        if (
+            (_isALorHL(prev1) && curr === LineCharProperty.NU) ||
+            (prev1 === LineCharProperty.NU && _isALorHL(curr))
+        ) {
+            setBreak(LineBreakType.prohibited, 23);
+            continue;
+        }
+
+        // Do not break between numeric prefixes and ideographs, or between
+        // ideographs and numeric postfixes.
+        // LB23a: PR × (ID | EB | EM)
+        if (
+            prev1 === LineCharProperty.PR &&
+            [LineCharProperty.ID, LineCharProperty.EB, LineCharProperty.EM].includes(curr)
+        ) {
+            setBreak(LineBreakType.prohibited, 23);
+        }
+
+        // LB23a: (ID | EB | EM) × PO
+        if (
+            [LineCharProperty.ID, LineCharProperty.EB, LineCharProperty.EM].includes(prev1) &&
+            curr === LineCharProperty.PO
+        ) {
+            setBreak(LineBreakType.prohibited, 23);
+            continue;
+        }
+
+        // Do not break between numeric prefix/postfix and letters, or between
+        // letters and prefix/postfix.
+        // LB24: (PR | PO) × (AL | HL)
+        if (
+            (prev1 === LineCharProperty.PR || prev1 === LineCharProperty.PO) &&
+            _isALorHL(curr)
+        ) {
+            setBreak(LineBreakType.prohibited, 24);
+            continue;
+        }
+
+        // LB24: (AL | HL) × (PR | PO)
+        if (
+            _isALorHL(prev1) &&
+            (curr === LineCharProperty.PR || curr === LineCharProperty.PO)
+        ) {
+            setBreak(LineBreakType.prohibited, 24);
+            continue;
+        }
+
+        // Do not break between the following pairs of classes relevant to numbers.
+        // LB25: (CL | CP | NU) × (PO | PR)
+        if (
+            [LineCharProperty.CL, LineCharProperty.CP, LineCharProperty.NU].includes(prev1) &&
+            [LineCharProperty.PO, LineCharProperty.PR].includes(curr)
+        ) {
+            setBreak(LineBreakType.prohibited, 25);
+            continue;
+        }
+        // LB25: (PO | PR) × OP
+        if (
+            [LineCharProperty.PO, LineCharProperty.PR].includes(prev1) &&
+            curr === LineCharProperty.OP
+        ) {
+            setBreak(LineBreakType.prohibited, 25);
+            continue;
+        }
+        // LB25: (PO | PR | HY | IS | NU | SY) × NU
+        if (
+            [LineCharProperty.PO, LineCharProperty.PR, LineCharProperty.HY, LineCharProperty.IS, LineCharProperty.NU, LineCharProperty.SY].includes(prev1) &&
+            curr === LineCharProperty.NU
+        ) {
+            setBreak(LineBreakType.prohibited, 25);
+            continue;
+        }
+
+        // Do not break a Korean syllable.
+        // LB26: JL × (JL | JV | H2 | H3)
+        if (
+            prev1 === LineCharProperty.JL &&
+            [LineCharProperty.JL, LineCharProperty.JV, LineCharProperty.H2, LineCharProperty.H3].includes(curr)
+        ) {
+            setBreak(LineBreakType.prohibited, 26);
+            continue;
+        }
+
+        // LB26: (JV | H2) × (JV | JT)
+        if (
+            (prev1 === LineCharProperty.JV || prev1 === LineCharProperty.H2) &&
+            (curr === LineCharProperty.JV || curr === LineCharProperty.JT)
+        ) {
+            setBreak(LineBreakType.prohibited, 26);
+            continue;
+        }
+        // LB26: (JT | H3) × JT
+        if (
+            (prev1 === LineCharProperty.JT || prev1 === LineCharProperty.H3) &&
+            curr === LineCharProperty.JT
+        ) {
+            setBreak(LineBreakType.prohibited, 26);
+            continue;
+        }
+
+        // Treat a Korean Syllable Block the same as ID.
+        // LB27: (JL | JV | JT | H2 | H3) × PO
+        if (_isKoreanSyllable(prev1) && curr === LineCharProperty.PO) {
+            setBreak(LineBreakType.prohibited, 27);
+            continue;
+        }
+        // LB27: PR × (JL | JV | JT | H2 | H3)
+        if (prev1 === LineCharProperty.PR && _isKoreanSyllable(curr)) {
+            setBreak(LineBreakType.prohibited, 27);
+            continue;
+        }
+
+        // Do not break between alphabetics.
+        // LB28: (AL | HL) × (AL | HL)
+        if (_isALorHL(prev1) && _isALorHL(curr)) {
+            setBreak(LineBreakType.prohibited, 28);
+            continue;
+        }
+
+        // Do not break between numeric punctuation and alphabetics (“e.g.”).
+        // LB29: IS × (AL | HL)
+        if (prev1 === LineCharProperty.IS && _isALorHL(curr)) {
+            setBreak(LineBreakType.prohibited, 29);
+            continue;
+        }
+
+        // Do not break between letters, numbers, or ordinary symbols and opening or
+        // closing parentheses.
+        // LB30: (AL | HL | NU) × OP
+        //
+        // LB30 requires that we exclude characters that have an Eastern Asian width
+        // property of value F, W or H classes.
+        if (
+            (_isALorHL(prev1) || prev1 === LineCharProperty.NU) &&
+            curr === LineCharProperty.OP &&
+            !_hasEastAsianWidthFWH(text.charCodeAt(index))
+        ) {
+            setBreak(LineBreakType.prohibited, 30);
+            continue;
+        }
+        // LB30: CP × (AL | HL | NU)
+        if (
+            prev1 === LineCharProperty.CP &&
+            !_hasEastAsianWidthFWH(text.charCodeAt(index - 1)) &&
+            (_isALorHL(curr) || curr === LineCharProperty.NU)
+        ) {
+            setBreak(LineBreakType.prohibited, 30);
+            continue;
+        }
+
+        // Break between two regional indicator symbols if and only if there are an
+        // even number of regional indicators preceding the position of the break.
+        // LB30a: sot (RI RI)* RI × RI
+        //        [^RI] (RI RI)* RI × RI
+        if (curr === LineCharProperty.RI) {
+            if (regionalIndicatorCount % 2 === 1) {
+                setBreak(LineBreakType.prohibited, 30);
+            } else {
+                setBreak(LineBreakType.opportunity, 30);
+            }
+            continue;
+        }
+
+        // Do not break between an emoji base and an emoji modifier.
+        // LB30b: EB × EM
+        if (prev1 === LineCharProperty.EB && curr === LineCharProperty.EM) {
+            setBreak(LineBreakType.prohibited, 30);
+            continue;
+        }
+
+        // Break everywhere else.
+        // LB31: ALL ÷
+        //       ÷ ALL
+        setBreak(LineBreakType.opportunity, 31);
+    }
+
+    // Always break at the end of text.
+    // LB3: ! eot
+    setBreak(LineBreakType.endOfText, 3);
 
     return fragments;
 }
-
-/**
- * Creates a V8 break iterator for line breaks.
- */
-// function createV8BreakIterator(): DomV8BreakIterator {
-//     // @ts-ignore: V8BreakIterator is not in standard lib
-//     return new Intl.v8BreakIterator(['en'], { type: 'line' });
-// }
-
-/**
- * Uses V8's break iterator to find line breaks in text.
- */
-// function breakLinesUsingV8BreakIterator(
-//     text: string,
-//     jsText: string,
-//     iterator: DomV8BreakIterator
-// ): LineBreakFragment[] {
-//     const fragments: LineBreakFragment[] = [];
-//     iterator.adoptText(jsText);
-
-//     let start = 0;
-//     let pos = iterator.first();
-//     let lastType = LineBreakType.prohibited;
-
-//     while (pos !== -1) {
-//         const next = iterator.next();
-//         if (next === -1) {
-//             // End of text
-//             if (pos > start) {
-//                 fragments.push(createFragment(text, start, pos, lastType));
-//             }
-//             break;
-//         }
-
-//         // Create fragment if we have accumulated any text
-//         if (pos > start) {
-//             fragments.push(createFragment(text, start, pos, lastType));
-//         }
-
-//         start = pos;
-//         pos = next;
-//         lastType = determineBreakType(text, pos);
-//     }
-
-//     return fragments;
-// }
-
-// /**
-//  * Creates a line break fragment with computed trailing spaces and newlines.
-//  */
-// function createFragment(
-//     text: string,
-//     start: number,
-//     end: number,
-//     type: LineBreakType
-// ): LineBreakFragment {
-//     let trailingNewlines = 0;
-//     let trailingSpaces = 0;
-
-//     for (let i = end - 1; i >= start; i--) {
-//         const charCode = text.charCodeAt(i);
-//         if (_kNewlines.has(charCode)) {
-//             trailingNewlines++;
-//         } else if (_kSpaces.has(charCode)) {
-//             trailingSpaces++;
-//         } else {
-//             break;
-//         }
-//     }
-
-//     return new LineBreakFragment(
-//         start,
-//         end,
-//         type,
-//         trailingNewlines,
-//         trailingSpaces
-//     );
-// }
-
-
-
-// ... rest of implementation including helper functions 

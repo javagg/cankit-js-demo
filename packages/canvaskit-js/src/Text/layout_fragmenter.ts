@@ -1,22 +1,21 @@
 import { GlyphInfo, RectWithDirection, TextDirection, PositionWithAffinity, TextStyle } from "canvaskit-wasm";
-import { TextDirection as  TextDirectionEnums, Affinity as AffinityEnums } from "../Core";
-import { TextFragment } from "./fragmenter";
+import { TextDirection as TextDirectionEnums, Affinity as AffinityEnums } from "../Core";
+import { TextFragment, TextFragmenter } from "./fragmenter";
 import { LineBreakFragmenter, LineBreakType } from "./line_breaker";
-import { ParagraphJS, ParagraphSpan, PlaceholderSpan, Spanometer, ParagraphLine} from "./ParagraphBuilder"
+import { ParagraphJS, ParagraphSpan, PlaceholderSpan, Spanometer, ParagraphLine } from "./ParagraphBuilder"
 import { BidiFragmenter, FragmentFlow } from "./text_direction";
-// import { TextStyleJS } from "./ParagraphStyle";
 
 abstract class _CombinedFragment extends TextFragment {
-    
+
     type: LineBreakType;
 
     span: ParagraphSpan;
 
-    trailingNewlines:number;
+    trailingNewlines: number;
 
-    trailingSpaces:number;
+    trailingSpaces: number;
 
-    get textDirection() {return this._textDirection;}
+    get textDirection() { return this._textDirection; }
     _textDirection: TextDirection;
 
     // start mixin _FragmentMetrics 
@@ -69,43 +68,43 @@ abstract class _CombinedFragment extends TextFragment {
         this._widthExcludingTrailingSpaces = widthExcludingTrailingSpaces;
         this._widthIncludingTrailingSpaces = widthIncludingTrailingSpaces;
     }
-    
+
     // end mixin _FragmentMetrics
 
     // start mixin _FragmentPosition
-/// Encapsulates positioning of the fragment relative to the line.
-///
-/// The coordinates are all relative to the line it belongs to. For example,
-/// [left] is the distance from the left edge of the line to the left edge of
-/// the fragment.
-///
-/// This is what the various measurements/coordinates look like for a fragment
-/// in an LTR paragraph:
-///
-///          *------------------------line.width-----------------*
-///                            *---width----*
-///          ┌─────────────────┬────────────┬────────────────────┐
-///          │                 │--FRAGMENT--│                    │
-///          └─────────────────┴────────────┴────────────────────┘
-///          *---startOffset---*
-///          *------left-------*
-///          *--------endOffset-------------*
-///          *----------right---------------*
-///
-///
-/// And in an RTL paragraph, [startOffset] and [endOffset] are flipped because
-/// the line starts from the right. Here's what they look like:
-///
-///          *------------------------line.width-----------------*
-///                            *---width----*
-///          ┌─────────────────┬────────────┬────────────────────┐
-///          │                 │--FRAGMENT--│                    │
-///          └─────────────────┴────────────┴────────────────────┘
-///                                         *----startOffset-----*
-///          *------left-------*
-///                            *-----------endOffset-------------*
-///          *----------right---------------*
-///  
+    /// Encapsulates positioning of the fragment relative to the line.
+    ///
+    /// The coordinates are all relative to the line it belongs to. For example,
+    /// [left] is the distance from the left edge of the line to the left edge of
+    /// the fragment.
+    ///
+    /// This is what the various measurements/coordinates look like for a fragment
+    /// in an LTR paragraph:
+    ///
+    ///          *------------------------line.width-----------------*
+    ///                            *---width----*
+    ///          ┌─────────────────┬────────────┬────────────────────┐
+    ///          │                 │--FRAGMENT--│                    │
+    ///          └─────────────────┴────────────┴────────────────────┘
+    ///          *---startOffset---*
+    ///          *------left-------*
+    ///          *--------endOffset-------------*
+    ///          *----------right---------------*
+    ///
+    ///
+    /// And in an RTL paragraph, [startOffset] and [endOffset] are flipped because
+    /// the line starts from the right. Here's what they look like:
+    ///
+    ///          *------------------------line.width-----------------*
+    ///                            *---width----*
+    ///          ┌─────────────────┬────────────┬────────────────────┐
+    ///          │                 │--FRAGMENT--│                    │
+    ///          └─────────────────┴────────────┴────────────────────┘
+    ///                                         *----startOffset-----*
+    ///          *------left-------*
+    ///                            *-----------endOffset-------------*
+    ///          *----------right---------------*
+    ///  
     get startOffset(): number {
         return this._startOffset;
     }
@@ -147,8 +146,8 @@ abstract class _CombinedFragment extends TextFragment {
 
 
     // start mixin _FragmentBox
-/// Encapsulates calculations related to the bounding box of the fragment
-/// relative to the paragraph.   
+    /// Encapsulates calculations related to the bounding box of the fragment
+    /// relative to the paragraph.   
     get top(): number {
         return this.line.baseline - this.ascent;
     }
@@ -299,7 +298,7 @@ abstract class _CombinedFragment extends TextFragment {
 
         const startIndex = this.start;
         const endIndex = this.end - this.trailingNewlines;
-    
+
         // Check some special cases to return the result quicker.
 
         const length = endIndex - startIndex;
@@ -308,12 +307,12 @@ abstract class _CombinedFragment extends TextFragment {
             return { pos: startIndex } //new TextPosition(startIndex);
         }
         if (length === 1) {
-           // Find out if `x` is closer to `startIndex` or `endIndex`.
+            // Find out if `x` is closer to `startIndex` or `endIndex`.
             const distanceFromStart = x;
             const distanceFromEnd = this.widthIncludingTrailingSpaces - x;
             return distanceFromStart < distanceFromEnd
-                ?  { pos: startIndex } // new TextPosition(startIndex)
-                :  { pos: startIndex, affinity: AffinityEnums.Upstream } // new TextPosition(endIndex, TextAffinity.upstream);
+                ? { pos: startIndex } // new TextPosition(startIndex)
+                : { pos: startIndex, affinity: AffinityEnums.Upstream } // new TextPosition(endIndex, TextAffinity.upstream);
         }
 
         this._spanometer.currentSpan = this.span;
@@ -326,10 +325,10 @@ abstract class _CombinedFragment extends TextFragment {
         // "A B C D E F"
         //     ↑
         //   cutoff
-        const cutoff = this._spanometer.forceBreak( startIndex,  endIndex, x, true);
+        const cutoff = this._spanometer.forceBreak(startIndex, endIndex, x, true);
 
         if (cutoff == endIndex) {
-            return  { pos: cutoff, affinity: AffinityEnums.Upstream } //  ui.TextPosition(offset: cutoff, affinity: ui.TextAffinity.upstream);
+            return { pos: cutoff, affinity: AffinityEnums.Upstream } //  ui.TextPosition(offset: cutoff, affinity: ui.TextAffinity.upstream);
         }
 
         const lowWidth = this._spanometer.measureRange(startIndex, cutoff);
@@ -338,7 +337,7 @@ abstract class _CombinedFragment extends TextFragment {
         // See if `x` is closer to `cutoff` or `cutoff + 1`.
         if (x - lowWidth < highWidth - x) {
             // The offset is closer to cutoff.
-            return  { pos: cutoff } //ui.TextPosition(offset: cutoff);
+            return { pos: cutoff } //ui.TextPosition(offset: cutoff);
         } else {
             // The offset is closer to cutoff + 1.
             return { pos: cutoff + 1, affinity: AffinityEnums.Upstream } //ui.TextPosition(offset: cutoff + 1, affinity: ui.TextAffinity.upstream);
@@ -477,10 +476,43 @@ abstract class _CombinedFragment extends TextFragment {
     // end mixin _FragmentBox 
 }
 
-
 export class LayoutFragment extends _CombinedFragment {
 
     fragmentFlow: FragmentFlow;
+
+    type: LineBreakType;
+
+    _textDirection: TextDirection | null;
+
+    span: ParagraphSpan;
+
+    trailingNewlines: number;
+
+    trailingSpaces: number;
+
+    constructor(
+        start,
+        end,
+        type,
+        _textDirection,
+        fragmentFlow,
+        span,
+        trailingNewlines,
+        trailingSpaces,
+    ) {
+        super(start, end)
+
+        console.assert(trailingNewlines >= 0)
+        console.assert(trailingSpaces >= trailingNewlines)
+        this.type = type
+        this._textDirection = _textDirection
+        this.fragmentFlow = fragmentFlow
+        this.span = span
+        this.trailingNewlines = trailingNewlines
+        this.trailingSpaces = trailingSpaces
+    }
+
+    get textDirection() { return this._textDirection }
 
     get style(): TextStyle {
         return this.span.style;
@@ -499,16 +531,16 @@ export class LayoutFragment extends _CombinedFragment {
     }
 
     get isBreak(): boolean {
-       return this.type != LineBreakType.prohibited;
-    } 
+        return this.type != LineBreakType.prohibited;
+    }
 
-    get isHardBreak(): boolean { 
+    get isHardBreak(): boolean {
         return this.type == LineBreakType.mandatory || this.type == LineBreakType.endOfText;
     }
 
     /// Returns the substring from [paragraph] that corresponds to this fragment,
     /// excluding new line characters.
-    getText( paragraph: ParagraphJS): string {
+    getText(paragraph: ParagraphJS): string {
         return paragraph.plainText.substring(this.start, this.end - this.trailingNewlines);
     }
 
@@ -516,8 +548,45 @@ export class LayoutFragment extends _CombinedFragment {
     /// given [index].
     // TODO(mdebbar): If we ever get multiple return values in Dart, we should use it!
     //                See: https://github.com/dart-lang/language/issues/68
-    split(index: number): LayoutFragment[] {
-        throw new Error("need implement")
+    split(index: number):  LayoutFragment[] {
+        console.assert(this.start <= index, 'index must be >= start');
+        console.assert(index <= this.end, 'index must be <= end');
+
+        if (this.start === index) {
+            return [null, this];
+        }
+
+        if (this.end === index) {
+            return [this, null];
+        }
+
+        const secondLength = this.end - index;
+
+        const secondTrailingNewlines = Math.min(this.trailingNewlines, secondLength);
+        const secondTrailingSpaces = Math.min(this.trailingSpaces, secondLength);
+
+        const firstTrailingNewlines = this.trailingNewlines - secondTrailingNewlines;
+        const firstTrailingSpaces = this.trailingSpaces - secondTrailingSpaces;
+
+        return [new LayoutFragment(
+            this.start,
+            index,
+            LineBreakType.prohibited,
+            this.textDirection,
+            this.fragmentFlow,
+            this.span,
+            firstTrailingNewlines,
+            firstTrailingSpaces
+        ), new LayoutFragment(
+            index,
+            this.end,
+            this.type,
+            this.textDirection,
+            this.fragmentFlow,
+            this.span,
+            secondTrailingNewlines,
+            secondTrailingSpaces
+        )];
     }
 
     toString(): string {
@@ -526,57 +595,60 @@ export class LayoutFragment extends _CombinedFragment {
 
 }
 
-/**
- * Splits text into measurable fragments.
- */
-export class LayoutFragmenter {
-    private readonly _text: string;
-    private readonly _spans: ParagraphSpan[];
-
-    constructor(text: string, spans: ParagraphSpan[]) {
-        this._text = text;
-        this._spans = spans;
+function clampInt(value: number, min: number, max: number): number {
+    if (min > max) {
+        throw new Error('min must be less than or equal to max');
     }
 
-    /**
-     * Creates fragments from the text and spans.
-     */
+    if (value < min) {
+        return min;
+    } else if (value > max) {
+        return max;
+    } else {
+        return value;
+    }
+}
+
+/// Splits [text] into fragments that are ready to be laid out by
+/// [TextLayoutService].
+///
+/// This fragmenter takes into account line breaks, directionality and styles.
+export class LayoutFragmenter extends TextFragmenter {
+
+    constructor(text: string, readonly paragraphSpans: ParagraphSpan[]) {
+        super(text)
+    }
+
     fragment(): LayoutFragment[] {
         const fragments: LayoutFragment[] = [];
         let fragmentStart = 0;
 
-        // Initialize fragment iterators
-        const lineBreakIterator = new LineBreakFragmenter(this._text).fragment()[Symbol.iterator]();
+        const lineBreakIterator = LineBreakFragmenter.create(this.text).fragment()[Symbol.iterator]();
         let lineBreakNext = lineBreakIterator.next();
-        const bidiIterator = new BidiFragmenter(this._text).fragment()[Symbol.iterator]();
+        const bidiIterator = new BidiFragmenter(this.text).fragment()[Symbol.iterator]();
         let bidiNext = bidiIterator.next();
-        const spanIterator = this._spans[Symbol.iterator]();
+        const spanIterator = this.paragraphSpans[Symbol.iterator]();
         let spanNext = spanIterator.next();
 
-        // Current fragments
         let currentLineBreak = lineBreakNext.value;
         let currentBidi = bidiNext.value;
         let currentSpan = spanNext.value;
 
         while (true) {
-            // Calculate fragment end based on the smallest end position
             const fragmentEnd = Math.min(
                 currentLineBreak.end,
                 Math.min(currentBidi.end, currentSpan.end)
             );
 
-            // Calculate line break properties
             const distanceFromLineBreak = currentLineBreak.end - fragmentEnd;
             const lineBreakType = distanceFromLineBreak === 0
                 ? currentLineBreak.type
                 : LineBreakType.prohibited;
 
-            // Calculate trailing whitespace
             const trailingNewlines = currentLineBreak.trailingNewlines - distanceFromLineBreak;
             const trailingSpaces = currentLineBreak.trailingSpaces - distanceFromLineBreak;
             const fragmentLength = fragmentEnd - fragmentStart;
 
-            // Add new fragment
             fragments.push(new LayoutFragment(
                 fragmentStart,
                 fragmentEnd,
@@ -590,7 +662,6 @@ export class LayoutFragmenter {
 
             fragmentStart = fragmentEnd;
 
-            // Move iterators if needed
             let moved = false;
             if (currentLineBreak.end === fragmentEnd && !(lineBreakNext = lineBreakIterator.next()).done) {
                 currentLineBreak = lineBreakNext.value;
@@ -605,7 +676,7 @@ export class LayoutFragmenter {
                 moved = true;
             }
 
-            // Exit if no more fragments
+            // Once we reached the end of all fragments, exit the loop.
             if (!moved) break;
         }
 
@@ -622,7 +693,7 @@ export class EllipsisFragment extends LayoutFragment {
             index,
             index,
             LineBreakType.endOfText,
-            TextDirection.LTR, // null
+            null, //TextDirectionEnums.LTR,
             // The ellipsis is always at the end of the line, so it can't be
             // sandwiched. This means it'll always follow the paragraph direction.
             FragmentFlow.sandwich,

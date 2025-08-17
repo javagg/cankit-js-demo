@@ -1895,7 +1895,7 @@ export class ParagraphPlaceholder extends ParagraphSpan {
 
 export class PlaceholderSpan extends ParagraphPlaceholder /*implements ParagraphSpan*/ {
   constructor(
-    style: EngineTextStyle,
+    style: TextStyleJS,
     start: number,
     end: number,
     width: number,
@@ -2120,9 +2120,9 @@ class LineBuilder {
         break;
 
       case PlaceholderAlignmentEnums.Middle:
-        const textMidPoint = this.height / 2;
-        const placeholderMidPoint = placeholder.height / 2;
-        const diff = placeholderMidPoint - textMidPoint;
+        const textMidPoint = this.height / 2
+        const placeholderMidPoint = placeholder.height / 2
+        const diff = placeholderMidPoint - textMidPoint
         ascent = this.ascent + diff;
         descent = this.descent + diff;
         break;
