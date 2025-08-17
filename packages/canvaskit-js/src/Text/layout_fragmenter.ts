@@ -1,10 +1,10 @@
 import { GlyphInfo, RectWithDirection, TextDirection, PositionWithAffinity } from "canvaskit-wasm";
-import { TextDirection as  TextDirectionEnums } from "../Core";
+import { TextDirection as  TextDirectionEnums, Affinity as AffinityEnums } from "../Core";
 import { TextFragment } from "./fragmenter";
 import { LineBreakFragmenter, LineBreakType } from "./line_breaker";
 import { ParagraphJS, ParagraphSpan, PlaceholderSpan, Spanometer, ParagraphLine} from "./ParagraphBuilder"
 import { BidiFragmenter, FragmentFlow } from "./text_direction";
-import { TextStyle as TextStyleJS } from "./ParagraphStyle";
+import { TextStyleJS } from "./ParagraphStyle";
 
 abstract class _CombinedFragment extends TextFragment {
     
@@ -294,7 +294,7 @@ abstract class _CombinedFragment extends TextFragment {
     /// the given [x] offset.
     ///
     /// The [x] offset is expected to be relative to the left edge of the fragment.
-    getPositionForX(x: number): TextPosition {
+    getPositionForX(x: number): PositionWithAffinity {
         x = this._makeXDirectionAgnostic(x);
 
         const startIndex = this.start;
@@ -305,15 +305,15 @@ abstract class _CombinedFragment extends TextFragment {
         const length = endIndex - startIndex;
 
         if (length === 0) {
-            return new TextPosition(startIndex);
+            return { pos: startIndex } //new TextPosition(startIndex);
         }
         if (length === 1) {
            // Find out if `x` is closer to `startIndex` or `endIndex`.
             const distanceFromStart = x;
             const distanceFromEnd = this.widthIncludingTrailingSpaces - x;
             return distanceFromStart < distanceFromEnd
-                ? new TextPosition(startIndex)
-                : new TextPosition(endIndex, TextAffinity.upstream);
+                ?  { pos: startIndex } // new TextPosition(startIndex)
+                :  { pos: startIndex, affinity: AffinityEnums.Upstream } // new TextPosition(endIndex, TextAffinity.upstream);
         }
 
         this._spanometer.currentSpan = this.span;
@@ -326,15 +326,10 @@ abstract class _CombinedFragment extends TextFragment {
         // "A B C D E F"
         //     ↑
         //   cutoff
-        const cutoff = this._spanometer.forceBreak(
-            startIndex,
-            endIndex,
-            availableWidth: x,
-            allowEmpty: true,
-        );
+        const cutoff = this._spanometer.forceBreak( startIndex,  endIndex, x, true);
 
         if (cutoff == endIndex) {
-            return ui.TextPosition(offset: cutoff, affinity: ui.TextAffinity.upstream);
+            return  { pos: cutoff, affinity: AffinityEnums.Upstream } //  ui.TextPosition(offset: cutoff, affinity: ui.TextAffinity.upstream);
         }
 
         const lowWidth = this._spanometer.measureRange(startIndex, cutoff);
@@ -342,11 +337,11 @@ abstract class _CombinedFragment extends TextFragment {
 
         // See if `x` is closer to `cutoff` or `cutoff + 1`.
         if (x - lowWidth < highWidth - x) {
-        // The offset is closer to cutoff.
-            return ui.TextPosition(offset: cutoff);
+            // The offset is closer to cutoff.
+            return  { pos: cutoff } //ui.TextPosition(offset: cutoff);
         } else {
-        // The offset is closer to cutoff + 1.
-            return ui.TextPosition(offset: cutoff + 1, affinity: ui.TextAffinity.upstream);
+            // The offset is closer to cutoff + 1.
+            return { pos: cutoff + 1, affinity: AffinityEnums.Upstream } //ui.TextPosition(offset: cutoff + 1, affinity: ui.TextAffinity.upstream);
         }
     }
 

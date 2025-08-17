@@ -60,16 +60,13 @@ export const packedLineBreakProperties = `00000008A0009!B000a!C000b000cD000d!E00
 
 export const singleLineBreakRangesCount = 937;
 
-
-export const lineLookup = ensureLineLookupInitialized()
-
 /// Initializes [lineLookup], if it's not already initialized.
 ///
 /// Use this function to trigger the initialization before [lineLookup] is
 /// actually used. For example, triggering it before the first application
 /// frame is rendered will reduce jank by moving the initialization out of
 /// the frame.
-let _lineLookup
+let _lineLookup = null
 export function ensureLineLookupInitialized(): UnicodePropertyLookup<LineCharProperty> {
     return _lineLookup ??= UnicodePropertyLookup.fromPackedData(
         packedLineBreakProperties,
@@ -78,6 +75,9 @@ export function ensureLineLookupInitialized(): UnicodePropertyLookup<LineCharPro
         defaultLineCharProperty
     )
 }
+
+
+export const lineLookup = ensureLineLookupInitialized()
 
 const _kNewlines = new Set([
     0x000A, // LF

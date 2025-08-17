@@ -22,7 +22,7 @@ export class RulerHost {
     private _isDisposed: boolean = false;
 
     constructor() {
-        this._rulerHost = createDomElement('flt-ruler-host');
+        this._rulerHost = document.createElement('flt-ruler-host');
 
         const style: CSSStyleDeclaration = (this._rulerHost as HTMLElement).style; // 安全转换以访问 style
         style.position = 'fixed';
@@ -37,20 +37,20 @@ export class RulerHost {
         //                https://github.com/flutter/flutter/issues/137344
         // 注意：需要处理 EnginePlatformDispatcher.instance,
         // implicitView 或 renderingHost 为 null 的情况
-        const instance = EnginePlatformDispatcher.instance;
-        if (instance && instance.implicitView && instance.implicitView.dom && instance.implicitView.dom.renderingHost) {
-            const renderingHost: DomNode = instance.implicitView.dom.renderingHost;
-            renderingHost.appendChild(this._rulerHost);
-        } else {
-            // 降级处理：如果无法找到 renderingHost，可以附加到 document.body
-            // 或者抛出错误，取决于应用策略
-            console.warn('Rendering host not found, appending RulerHost to document.body');
-            document.body.appendChild(this._rulerHost);
-            // throw new Error('Rendering host not available');
-        }
+        // const instance = EnginePlatformDispatcher.instance;
+        // if (instance && instance.implicitView && instance.implicitView.dom && instance.implicitView.dom.renderingHost) {
+        //     const renderingHost: DomNode = instance.implicitView.dom.renderingHost;
+        //     renderingHost.appendChild(this._rulerHost);
+        // } else {
+        //     // 降级处理：如果无法找到 renderingHost，可以附加到 document.body
+        //     // 或者抛出错误，取决于应用策略
+        //     console.warn('Rendering host not found, appending RulerHost to document.body');
+        //     document.body.appendChild(this._rulerHost);
+        //     // throw new Error('Rendering host not available');
+        // }
 
-        // 注册热重启监听器，以便在热重启时清理资源
-        registerHotRestartListener(() => this.dispose());
+        // // 注册热重启监听器，以便在热重启时清理资源
+        // registerHotRestartListener(() => this.dispose());
     }
 
     /**

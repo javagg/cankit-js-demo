@@ -66,10 +66,10 @@ import {
   FontMgrFactory,
   TypefaceFactory,
   TypefaceFontProviderFactory,
-  ParagraphStyle,
+  ParagraphStyleJS, // as ParagraphStyle,
   ParagraphBuilderFactory,
-  TextStyle,
-  Paragraph,
+  TextStyleJS, //as TextStyle,
+  // Paragraph,
 } from "./Text";
 import { PictureRecorderJS } from "./Picture";
 import { normalizeArray } from "./Core/Values";
@@ -325,7 +325,8 @@ export class CanvasKitJS extends CoreCanvasKit implements ICanvasKit {
   ): ManagedSkottieAnimation {
     throw new Error("Skottie is not available");
   }
-  ParagraphStyle = ParagraphStyle as unknown as ParagraphStyleConstructor;
+  // ParagraphStyle = ParagraphStyle as unknown as ParagraphStyleConstructor;
+  ParagraphStyle = ParagraphStyleJS as ParagraphStyleConstructor;
   ContourMeasureIter =
     ContourMeasureIterJS as unknown as ContourMeasureIterConstructor;
   Font = FontJS as FontConstructor;
@@ -333,7 +334,9 @@ export class CanvasKitJS extends CoreCanvasKit implements ICanvasKit {
   Path = PathJS as unknown as PathConstructorAndFactory;
   PictureRecorder =
     PictureRecorderJS as unknown as DefaultConstructor<PictureRecorder>;
-  TextStyle = TextStyle as unknown as TextStyleConstructor;
+  // TextStyle = TextStyle as unknown as TextStyleConstructor;
+  TextStyle = TextStyleJS as TextStyleConstructor;
+
   ParagraphBuilder = ParagraphBuilderFactory;
   ColorFilter = ColorFilterFactory;
   FontCollection = FontCollectionFactory;

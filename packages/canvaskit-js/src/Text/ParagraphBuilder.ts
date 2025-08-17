@@ -20,6 +20,13 @@ import type {
   TypefaceFontProvider,
   Canvas,
   TextDirection,
+  Color,
+  FontWeight,
+  FontStyle,
+  TextFontFeatures,
+  TextFontVariations,
+  TextShadow,
+  DecorationStyle,
 } from "canvaskit-wasm";
 import { HostObject } from "../HostObject";
 import { StringBuffer } from "./sb";
@@ -28,12 +35,10 @@ import { PaintJS } from "../Paint";
 import { FontJS } from "./Font";
 import { Affinity as AffinityEnum, PlaceholderAlignment as PlaceholderAlignmentEnums, TextAlign as TextAlignEnums, TextBaselineEnum, TextDirection as TextDirectionEnums } from "../Core";
 import { WordBreaker } from "./word_breaker";
-import {
-  ParagraphStyle as ParagraphStyleJS,
-  TextStyle as TextStyleJS,
-} from "./ParagraphStyle";
+import { ParagraphStyleJS, TextStyleJS, StrutStyleJS } from "./ParagraphStyle";
 import { TypefaceFontProviderJS } from "./TypefaceFont";
 import { measureSubstring, RulerHost } from "./measurement";
+import { LineMetricsJS } from "./paragraph";
 
 // export const ParagraphBuilder: CKParagraphBuilder = {
 //     addPlaceholder: function (width?: number, height?: number, alignment?: PlaceholderAlignment, baseline?: TextBaseline, offset?: number): void {
@@ -173,10 +178,10 @@ import { measureSubstring, RulerHost } from "./measurement";
 // }
 
 function createDomCanvasElement(width: number, height: number) {
-  const ele = new HTMLCanvasElement()
-  ele.width = width
-  ele.height = height
-  return ele
+  const c: HTMLCanvasElement = document.createElement("canvas")
+  c.width = width
+  c.height = height
+  return c
 }
 
 // We don't use this canvas to draw anything, so let's make it as small as
@@ -186,9 +191,306 @@ const textContext = createDomCanvasElement(0, 0).getContext("2d")
 const placeholderChar = String.fromCharCode(0xfffc);
 const scale = 1.0;
 
-export class ParagraphBuilderJS
-  extends HostObject<"ParagraphBuilder">
-  implements CKParagraphBuilder {
+
+/// Represents a node in the tree of text styles pushed to [ui.ParagraphBuilder].
+///
+/// The [ui.ParagraphBuilder.pushText] and [ui.ParagraphBuilder.pop] operations
+/// represent the entire tree of styles in the paragraph. In our implementation,
+/// we don't need to keep the entire tree structure in memory. At any point in
+/// time, we only need a stack of nodes that represent the current branch in the
+/// tree. The items in the stack are [StyleNode] objects.
+export abstract class StyleNode {
+  constructor(
+    readonly parent: StyleNode | null,
+    readonly style: TextStyle
+  ) { }
+
+  /// Create a child for this style node.
+  ///
+  /// We are not creating a tree structure, hence there's no need to keep track
+  /// of the children.
+  createChild(style: TextStyle): StyleNode {
+    return new ChildStyleNode(this, style);
+  }
+
+  _cachedStyle?: TextStyle;
+
+  /// Generates the final text style to be applied to the text span.
+  ///
+  /// The resolved text style is equivalent to the entire ascendent chain of
+  /// parent style nodes.
+  resolveStyle(): TextStyle {
+    return this._cachedStyle ??= new TextStyleJS({
+        color: this._color,
+        // decoration: _decoration,
+        // decorationColor: _decorationColor,
+        // decorationStyle: _decorationStyle,
+        // decorationThickness: _decorationThickness,
+        // fontWeight: _fontWeight,
+        // fontStyle: _fontStyle,
+        // textBaseline: _textBaseline,
+        // fontFamily: _fontFamily,
+        // fontFamilyFallback: _fontFamilyFallback,
+        // fontFeatures: _fontFeatures,
+        // fontVariations: _fontVariations,
+        // fontSize: _fontSize,
+        // letterSpacing: _letterSpacing,
+        // wordSpacing: _wordSpacing,
+        // height: _height,
+        // leadingDistribution: _leadingDistribution,
+        // locale: _locale,
+        // background: _background,
+        // foreground: _foreground,
+        // shadows: _shadows,
+    });
+  }
+
+  abstract get _color(): Color | null
+
+  // get _decoration(): TextDecoration | null;
+
+  abstract get _decorationColor(): Color | null
+
+  abstract get _decorationStyle(): DecorationStyle | null
+
+  abstract get _decorationThickness(): number | null
+
+  abstract get _fontWeight(): FontWeight | null
+
+  abstract get _fontStyle(): FontStyle | null
+
+  abstract get _textBaseline(): TextBaseline | null
+
+  abstract get _fontFamilyFallback(): string[] | null
+
+  abstract get _fontFeatures(): TextFontFeatures[] | null
+
+  abstract get _fontVariations(): TextFontVariations[] | null
+
+  abstract get _fontSize(): number
+
+  abstract get _letterSpacing(): number | null
+
+  abstract get _wordSpacing(): number | null
+
+  abstract get _height(): number | null
+
+  // abstract get _leadingDistribution(): TextLeadingDistribution | null;
+
+  // abstract get _locale(): Locale | null ;
+
+  abstract get _background(): Paint | null
+
+  abstract get _foreground(): Paint | null
+
+  abstract get _shadows(): TextShadow[] | null
+
+  // Font family is slightly different from the other properties above. It's
+  // never null on the TextStyle object, so we use `isFontFamilyProvided` to
+  // check if font family is defined or not.
+  abstract get _fontFamily(): string
+}
+
+export class ChildStyleNode extends StyleNode {
+  constructor(readonly parent: StyleNode, readonly style: TextStyle) {
+    super(parent, style)
+  }
+
+  // Read these properties from the TextStyle associated with this node. If the
+  // property isn't defined, go to the parent node.
+
+  get _color(): Color | null {
+    return this.style.color ?? (this._foreground == null ? this.parent._color : null);
+  }
+
+  // get _decoration(): TextDecoration | null {
+  //   return this.style.decoration ?? this.parent._decoration;
+  // }
+
+  get _decorationColor(): Color | null {
+    return this.style.decorationColor ?? this.parent._decorationColor;
+  }
+
+  get _decorationStyle(): DecorationStyle | null {
+    return this.style.decorationStyle ?? this.parent._decorationStyle;
+  }
+
+  get _decorationThickness(): number | null {
+    return this.style.decorationThickness ?? this.parent._decorationThickness;
+  }
+
+  get _fontWeight(): FontWeight | null {
+    return this.style.fontWeight ?? this.parent._fontWeight;
+  }
+
+  get _fontStyle(): FontStyle | null {
+    return this.style.fontStyle ?? this.parent._fontStyle;
+  }
+
+  get _textBaseline(): TextBaseline | null {
+    return this.style.textBaseline ?? this.parent._textBaseline;
+  }
+
+  get _fontFamilyFallback(): string[] | null {
+    return this.style.fontFamilyFallback ?? this.parent._fontFamilyFallback;
+  }
+
+  get _fontFeatures(): TextFontFeatures[] | null {
+    return this.style.fontFeatures ?? this.parent._fontFeatures;
+  }
+
+  get _fontVariations(): TextFontVariations[] | null {
+    return this.style.fontVariations ?? this.parent._fontVariations;
+  }
+
+  get _fontSize(): number {
+    return this.style.fontSize ?? this.parent._fontSize;
+  }
+
+  get _letterSpacing(): number | null {
+    return this.style.letterSpacing ?? this.parent._letterSpacing;
+  }
+
+  get _wordSpacing(): number | null {
+    return this.style.wordSpacing ?? this.parent._wordSpacing;
+  }
+
+  get _height(): number | null {
+    return this.style.height === ui.kTextHeightNone ? null : (this.style.height ?? this.parent._height);
+  }
+
+  // get _leadingDistribution(): TextLeadingDistribution | null {
+  //   return this.style.leadingDistribution ?? this.parent._leadingDistribution;
+  // }
+
+  // get _locale(): Locale | null {
+  //   return this.style.locale ?? this.parent._locale;
+  // }
+
+  get _background(): Paint | null {
+    return this.style.background ?? this.parent._background;
+  }
+
+  get _foreground(): Paint | null {
+    return this.style.foreground ?? this.parent._foreground;
+  }
+
+  get _shadows(): TextShadow[] | null {
+    return this.style.shadows ?? this.parent._shadows;
+  }
+
+  // Font family is slightly different from the other properties above. It's
+  // never null on the TextStyle object, so we use `isFontFamilyProvided` to
+  // check if font family is defined or not.
+  get _fontFamily(): string {
+    return this.style.isFontFamilyProvided ? this.style.fontFamily : this.parent._fontFamily;
+  }
+}
+/**
+* The root node of a style inheritance tree.
+*/
+export class RootStyleNode extends StyleNode {
+  constructor(readonly paragraphStyle: ParagraphStyle) {
+    super(null, paragraphStyle.textStyle!);
+  }
+
+  // constructor(paragraphStyle: ParagraphStyle) {
+  //   super(null, {
+  //     fontFamily: paragraphStyle.fontFamily,
+  //     fontSize: paragraphStyle.fontSize,
+  //     fontWeight: paragraphStyle.fontWeight,
+  //     fontStyle: paragraphStyle.fontStyle,
+  //     height: paragraphStyle.height,
+  //     locale: paragraphStyle.locale,
+  //   });
+  // }
+  get _color(): Color | null {
+    return null;
+  }
+
+  // get _decoration(): TextDecoration | null {
+  //   return null;
+  // }
+
+  get _decorationColor(): Color | null {
+    return null;
+  }
+
+  get _decorationStyle(): DecorationStyle | null {
+    return null;
+  }
+
+  get _decorationThickness(): number | null {
+    return null;
+  }
+
+  get _fontWeight(): FontWeight | null {
+    return this.paragraphStyle.fontWeight ?? null;
+  }
+
+  get _fontStyle(): FontStyle | null {
+    return this.paragraphStyle.fontStyle ?? null;
+  }
+
+  get _textBaseline(): TextBaseline | null {
+    return null;
+  }
+
+  get _fontFamily(): string {
+    return this.paragraphStyle.fontFamily ?? StyleManager.defaultFontFamily;
+  }
+
+  get _fontFamilyFallback(): string[] | null {
+    return null;
+  }
+
+  get _fontFeatures(): TextFontFeatures[] | null {
+    return null;
+  }
+
+  get _fontVariations(): TextFontVariations[] | null {
+    return null;
+  }
+
+  get _fontSize(): number {
+    return this.paragraphStyle.fontSize ?? StyleManager.defaultFontSize;
+  }
+
+  get _letterSpacing(): number | null {
+    return null;
+  }
+
+  get _wordSpacing(): number | null {
+    return null;
+  }
+
+  get _height(): number | null {
+    return this.paragraphStyle.height ?? null;
+  }
+
+  // get _leadingDistribution(): TextLeadingDistribution | null {
+  //   return null;
+  // }
+
+  // get _locale(): Locale | null {
+  //   return this.paragraphStyle.locale ?? null;
+  // }
+
+  get _background(): Paint | null {
+    return null;
+  }
+
+  get _foreground(): Paint | null {
+    return null;
+  }
+
+  get _shadows(): TextShadow[] | null {
+    return null;
+  }
+}
+
+
+export class ParagraphBuilderJS   extends HostObject<"ParagraphBuilder">  implements CKParagraphBuilder {
   _plainTextBuf = new StringBuffer();
   style: ParagraphStyleJS;
   fontSrc: TypefaceFontProviderJS;
@@ -196,10 +498,18 @@ export class ParagraphBuilderJS
 
   _placeholderScales: number[] = [];
   _spans: ParagraphSpan[] = [];
+  _styleStack: StyleNode[] = [];
+
+  _rootStyleNode: RootStyleNode;
+
+  get _currentStyleNode(): StyleNode {
+    return  this._styleStack.length == 0 ? this._rootStyleNode : this._styleStack[this._styleStack.length - 1];
+  }
 
   constructor(style: ParagraphStyle, fontSrc: TypefaceFontProvider) {
     super("ParagraphBuilder");
     this.style = new ParagraphStyleJS(style);
+    this._rootStyleNode = new RootStyleNode(style);
     this.fontSrc = fontSrc;
   }
 
@@ -218,18 +528,17 @@ export class ParagraphBuilderJS
     baseline?: TextBaseline,
     offset?: number
   ): void {
-    // assert(
-    // !(alignment == ui.PlaceholderAlignment.aboveBaseline ||
-    //         alignment == ui.PlaceholderAlignment.belowBaseline ||
-    //         alignment == ui.PlaceholderAlignment.baseline) ||
-    //     baseline != null,
-    // );
+    console.assert(!(alignment == PlaceholderAlignmentEnums.AboveBaseline ||
+      alignment == PlaceholderAlignmentEnums.BelowBaseline ||
+      alignment == PlaceholderAlignmentEnums.Baseline) ||
+      baseline != null,
+    );
 
     const start = this._plainTextBuf.length;
     this._plainTextBuf.append(placeholderChar);
     const end = this._plainTextBuf.length;
 
-    const style = _currentStyleNode.resolveStyle();
+    const style = this._currentStyleNode.resolveStyle();
     // _updateCanDrawOnCanvas(style);
 
     this._placeholderCount++;
@@ -253,7 +562,7 @@ export class ParagraphBuilderJS
     this._plainTextBuf.append(text);
     const end = this._plainTextBuf.length;
 
-    const style = _currentStyleNode.resolveStyle();
+    const style = this._currentStyleNode.resolveStyle();
     // _updateCanDrawOnCanvas(style);
 
     this._spans.push(new ParagraphSpan(style, start, end));
@@ -265,7 +574,7 @@ export class ParagraphBuilderJS
       //
       // We want the paragraph to always have a non-empty list of spans to match
       // the expectations of the [LayoutFragmenter].
-      this._spans.push(new ParagraphSpan(rootStyleNode.resolveStyle(), 0, 0));
+      this._spans.push(new ParagraphSpan(this._rootStyleNode.resolveStyle(), 0, 0));
     }
 
     return new ParagraphJS(
@@ -297,10 +606,12 @@ export class ParagraphBuilderJS
     throw new Error("Method not implemented.");
   }
   pop(): void {
-    throw new Error("Method not implemented.");
+  if (this._styleStack.length != 0) {
+      this._styleStack.pop();
+    }
   }
-  pushStyle(textStyle: TextStyle): void {
-    throw new Error("Method not implemented.");
+  pushStyle(style: TextStyle): void {
+    this._styleStack.push(this._currentStyleNode.createChild(style as EngineTextStyle))
   }
   pushPaintStyle(textStyle: TextStyle, fg: Paint, bg: Paint): void {
     throw new Error("Method not implemented.");
@@ -533,7 +844,7 @@ export class ParagraphJS
 }
 export class ParagraphLine {
   /// Metrics for this line of the paragraph.
-  readonly lineMetrics: LineMetrics;
+  readonly lineMetrics: LineMetricsJS;
 
   /// The index (inclusive) in the text where this line begins.
   readonly startIndex: number;
@@ -631,21 +942,21 @@ export class ParagraphLine {
   }) {
     console.assert(options.trailingNewlines <= options.endIndex - options.startIndex);
 
-    this.lineMetrics = {
-      startIndex: options.startIndex,
-      endIndex: options.endIndex,
-      endExcludingWhitespaces: options.trailingSpaces,
-      endIncludingNewline: options.trailingNewlines,
-      isHardBreak: options.hardBreak,
-      ascent: options.ascent,
-      descent: options.descent,
-      // unscaledAscent: options.ascent,
-      height: options.height,
-      width: options.width,
-      left: options.left,
-      baseline: options.baseline,
-      lineNumber: options.lineNumber,
-    };
+    this.lineMetrics = new LineMetricsJS(
+      options.startIndex,
+      options.endIndex,
+      options.trailingSpaces,
+      options.trailingNewlines,
+      options.hardBreak,
+      options.ascent,
+      options.descent,
+      options.ascent,
+      options.height,
+      options.width,
+      options.left,
+      options.baseline,
+      options.lineNumber,
+    );
 
     this.startIndex = options.startIndex;
     this.endIndex = options.endIndex;
@@ -1070,7 +1381,7 @@ export class ParagraphSpan {
 ///
 /// [width], [height] and [baselineOffset] are expected to be already scaled.
 export class ParagraphPlaceholder extends ParagraphSpan {
-    /// The scaled width of the placeholder.
+  /// The scaled width of the placeholder.
   width: number;
 
   /// The scaled height of the placeholder.
@@ -1087,7 +1398,7 @@ export class ParagraphPlaceholder extends ParagraphSpan {
 
   /// Dictates whether to use alphabetic or ideographic baseline.
   baseline: TextBaseline;
-  
+
   constructor(style: TextStyleJS, start: number, end: number) {
     super(style, start, end);
   }
@@ -1095,7 +1406,7 @@ export class ParagraphPlaceholder extends ParagraphSpan {
 
 export class PlaceholderSpan extends ParagraphPlaceholder /*implements ParagraphSpan*/ {
   constructor(
-    style: TextStyleJS,
+    style: EngineTextStyle,
     start: number,
     end: number,
     width: number,
@@ -1227,7 +1538,7 @@ class LineBuilder {
       case TextAlignEnums.Start:
         return paragraphDirection === TextDirectionEnums.RTL ? emptySpace : 0.0;
       case TextAlignEnums.End:
-        return paragraphDirection ===  TextDirectionEnums.RTL ? 0.0 : emptySpace;
+        return paragraphDirection === TextDirectionEnums.RTL ? 0.0 : emptySpace;
       default:
         return 0.0;
     }
@@ -1458,30 +1769,30 @@ class LineBuilder {
     this.forceBreakLastFragment(availableWidth, true);
 
     const ellipsisFragment = new EllipsisFragment(this.endIndex, lastFragment.span)
-      // start: this.endIndex,
-      // end: this.endIndex,
-      // trailingSpaces: 0,
-      // trailingNewlines: 0,
-      // widthExcludingTrailingSpaces: ellipsisWidth,
-      // widthIncludingTrailingSpaces: ellipsisWidth,
-      // ascent: lastFragment.ascent,
-      // descent: lastFragment.descent,
-      // span: lastFragment.span,
-      // isBreak: false,
-      // isHardBreak: false,
-      // isSpaceOnly: false,
-      // isPlaceholder: false,
-      // split: (breakingPoint: number) => [null, null],
-     ellipsisFragment. setMetrics(
-        this.spanometer, lastFragment.ascent, lastFragment.descent, ellipsisWidth, ellipsisWidth)
+    // start: this.endIndex,
+    // end: this.endIndex,
+    // trailingSpaces: 0,
+    // trailingNewlines: 0,
+    // widthExcludingTrailingSpaces: ellipsisWidth,
+    // widthIncludingTrailingSpaces: ellipsisWidth,
+    // ascent: lastFragment.ascent,
+    // descent: lastFragment.descent,
+    // span: lastFragment.span,
+    // isBreak: false,
+    // isHardBreak: false,
+    // isSpaceOnly: false,
+    // isPlaceholder: false,
+    // split: (breakingPoint: number) => [null, null],
+    ellipsisFragment.setMetrics(
+      this.spanometer, lastFragment.ascent, lastFragment.descent, ellipsisWidth, ellipsisWidth)
 
-      //   ascent: number,
-      //   descent: number,
-      //   widthExcludingTrailingSpaces: number,
-      //   widthIncludingTrailingSpaces: number
-      // ) => {
-      //   // 实现设置度量的逻辑
-      // }
+    //   ascent: number,
+    //   descent: number,
+    //   widthExcludingTrailingSpaces: number,
+    //   widthIncludingTrailingSpaces: number
+    // ) => {
+    //   // 实现设置度量的逻辑
+    // }
     // } as LayoutFragment;
 
     this.addFragment(ellipsisFragment);
@@ -1531,7 +1842,7 @@ class LineBuilder {
     }
 
     const trailingNewlines: number = this.isEmpty ? 0 : this._fragments[this._fragments.length - 1].trailingNewlines;
-    const line: ParagraphLine = {
+    const line = new ParagraphLine({
       lineNumber: this.lineNumber,
       startIndex: this.startIndex,
       endIndex: this.endIndex,
@@ -1549,7 +1860,7 @@ class LineBuilder {
       fragments: this._fragments,
       textDirection: this._paragraphDirection,
       paragraph: this.paragraph
-    };
+    });
 
     for (const fragment of this._fragments) {
       fragment.line = line;
