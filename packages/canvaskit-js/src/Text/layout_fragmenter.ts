@@ -1,10 +1,10 @@
-import { GlyphInfo, RectWithDirection, TextDirection, PositionWithAffinity } from "canvaskit-wasm";
+import { GlyphInfo, RectWithDirection, TextDirection, PositionWithAffinity, TextStyle } from "canvaskit-wasm";
 import { TextDirection as  TextDirectionEnums, Affinity as AffinityEnums } from "../Core";
 import { TextFragment } from "./fragmenter";
 import { LineBreakFragmenter, LineBreakType } from "./line_breaker";
 import { ParagraphJS, ParagraphSpan, PlaceholderSpan, Spanometer, ParagraphLine} from "./ParagraphBuilder"
 import { BidiFragmenter, FragmentFlow } from "./text_direction";
-import { TextStyleJS } from "./ParagraphStyle";
+// import { TextStyleJS } from "./ParagraphStyle";
 
 abstract class _CombinedFragment extends TextFragment {
     
@@ -482,8 +482,8 @@ export class LayoutFragment extends _CombinedFragment {
 
     fragmentFlow: FragmentFlow;
 
-    get style(): TextStyleJS {
-        return  this.span.style;
+    get style(): TextStyle {
+        return this.span.style;
     }
 
     get length(): number {

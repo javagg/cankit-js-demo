@@ -16,7 +16,7 @@ export abstract class TextFragmenter {
 
 /// Represents a fragment produced by [TextFragmenter].
 export abstract class TextFragment {
-    constructor(protected readonly start: number, protected readonly end: number) {
+    constructor(readonly start: number, readonly end: number) {
     }
 
     /// Whether this fragment's range overlaps with the range from [start] to [end].

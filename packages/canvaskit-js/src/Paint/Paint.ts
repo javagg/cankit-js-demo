@@ -1,5 +1,6 @@
 /* eslint-disable no-bitwise */
 import type {
+  Blender,
   ColorSpace,
   EmbindEnumEntity,
   Paint,
@@ -158,6 +159,10 @@ export class PaintJS extends HostObject<"Paint"> implements Paint {
 
   setStyle(style: EmbindEnumEntity): void {
     this.paint.setStrokeStyle(style === PaintStyle.Stroke);
+  }
+
+  setBlender(blender: Blender): void {
+    throw new Error("not implemented")
   }
 }
 

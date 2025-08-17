@@ -66,9 +66,9 @@ import {
   FontMgrFactory,
   TypefaceFactory,
   TypefaceFontProviderFactory,
-  ParagraphStyleJS, // as ParagraphStyle,
+  ParagraphStyleJS,
   ParagraphBuilderFactory,
-  TextStyleJS, //as TextStyle,
+  TextStyleJS,
   // Paragraph,
 } from "./Text";
 import { PictureRecorderJS } from "./Picture";

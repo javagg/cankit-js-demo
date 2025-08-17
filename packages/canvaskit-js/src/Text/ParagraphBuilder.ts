@@ -20,25 +20,28 @@ import type {
   TypefaceFontProvider,
   Canvas,
   TextDirection,
-  Color,
   FontWeight,
   FontStyle,
   TextFontFeatures,
   TextFontVariations,
   TextShadow,
   DecorationStyle,
+  InputColor,
+  Rect,
 } from "canvaskit-wasm";
 import { HostObject } from "../HostObject";
 import { StringBuffer } from "./sb";
-import { EllipsisFragment, LayoutFragment } from "./layout_fragmenter";
+import { EllipsisFragment, LayoutFragment, LayoutFragmenter } from "./layout_fragmenter";
 import { PaintJS } from "../Paint";
 import { FontJS } from "./Font";
-import { Affinity as AffinityEnum, PlaceholderAlignment as PlaceholderAlignmentEnums, TextAlign as TextAlignEnums, TextBaselineEnum, TextDirection as TextDirectionEnums } from "../Core";
+import { Affinity as AffinityEnums, PlaceholderAlignment as PlaceholderAlignmentEnums, TextAlign as TextAlignEnums, TextBaseline as TextBaselineEnums, TextDirection as TextDirectionEnums } from "../Core";
 import { WordBreaker } from "./word_breaker";
-import { ParagraphStyleJS, TextStyleJS, StrutStyleJS } from "./ParagraphStyle";
+import { ParagraphStyleJS, TextStyleJS } from "./ParagraphStyle";
 import { TypefaceFontProviderJS } from "./TypefaceFont";
-import { measureSubstring, RulerHost } from "./measurement";
+import { baselineRatioHack, measureSubstring, RulerHost } from "./measurement";
 import { LineMetricsJS } from "./paragraph";
+import { LineBreakType } from "./line_breaker";
+import { FragmentFlow } from "./text_direction";
 
 // export const ParagraphBuilder: CKParagraphBuilder = {
 //     addPlaceholder: function (width?: number, height?: number, alignment?: PlaceholderAlignment, baseline?: TextBaseline, offset?: number): void {
@@ -200,10 +203,10 @@ const scale = 1.0;
 /// time, we only need a stack of nodes that represent the current branch in the
 /// tree. The items in the stack are [StyleNode] objects.
 export abstract class StyleNode {
-  constructor(
-    readonly parent: StyleNode | null,
-    readonly style: TextStyle
-  ) { }
+  // constructor(
+  //   readonly parent: StyleNode | null,
+  //   readonly style: TextStyle
+  // ) { }
 
   /// Create a child for this style node.
   ///
@@ -220,48 +223,54 @@ export abstract class StyleNode {
   /// The resolved text style is equivalent to the entire ascendent chain of
   /// parent style nodes.
   resolveStyle(): TextStyle {
-    return this._cachedStyle ??= new TextStyleJS({
-        color: this._color,
-        // decoration: _decoration,
-        // decorationColor: _decorationColor,
-        // decorationStyle: _decorationStyle,
-        // decorationThickness: _decorationThickness,
-        // fontWeight: _fontWeight,
-        // fontStyle: _fontStyle,
-        // textBaseline: _textBaseline,
-        // fontFamily: _fontFamily,
-        // fontFamilyFallback: _fontFamilyFallback,
-        // fontFeatures: _fontFeatures,
-        // fontVariations: _fontVariations,
-        // fontSize: _fontSize,
-        // letterSpacing: _letterSpacing,
-        // wordSpacing: _wordSpacing,
-        // height: _height,
-        // leadingDistribution: _leadingDistribution,
-        // locale: _locale,
-        // background: _background,
-        // foreground: _foreground,
-        // shadows: _shadows,
-    });
+    return this._cachedStyle ??= {
+      // background: this._background,
+      backgroundColor: this._backgroundColor,
+      // foreground: this._foreground,
+      color: this._color,
+      decoration: this._decoration,
+      decorationColor: this._decorationColor,
+      decorationStyle: this._decorationStyle,
+      decorationThickness: this._decorationThickness,
+      // fontWeight: this._fontWeight,
+      fontStyle: this._fontStyle,
+      fontFamily: this._fontFamily,
+      // fontFamilyFallback: this._fontFamilyFallback,
+      fontFeatures: this._fontFeatures,
+      fontVariations: this._fontVariations,
+      fontSize: this._fontSize,
+      foregroundColor: this._foregroundColor,
+      letterSpacing: this._letterSpacing,
+      wordSpacing: this._wordSpacing,
+      // height: this._height,
+      heightMultiplier: this._heightMultiplier,
+      // leadingDistribution: this._leadingDistribution,
+      halfLeading: this._halfLeading,
+      locale: this._locale,
+      shadows: this._shadows,
+      textBaseline: this._textBaseline,
+    } as TextStyle;
   }
 
-  abstract get _color(): Color | null
+  abstract get _backgroundColor(): InputColor | null
 
-  // get _decoration(): TextDecoration | null;
+  abstract get _color(): InputColor | null
 
-  abstract get _decorationColor(): Color | null
+  abstract get _decoration(): number | null
+
+  abstract get _decorationColor(): InputColor | null
 
   abstract get _decorationStyle(): DecorationStyle | null
 
   abstract get _decorationThickness(): number | null
 
-  abstract get _fontWeight(): FontWeight | null
+  // abstract get _fontWeight(): FontWeight | null
 
   abstract get _fontStyle(): FontStyle | null
 
   abstract get _textBaseline(): TextBaseline | null
 
-  abstract get _fontFamilyFallback(): string[] | null
+  // abstract get _fontFamilyFallback(): string[] | null
 
   abstract get _fontFeatures(): TextFontFeatures[] | null
 
@@ -273,15 +282,17 @@ export abstract class StyleNode {
 
   abstract get _wordSpacing(): number | null
 
-  abstract get _height(): number | null
+  // abstract get _height(): number | null
 
   // abstract get _leadingDistribution(): TextLeadingDistribution | null;
 
-  // abstract get _locale(): Locale | null ;
+  abstract get _heightMultiplier(): number | null
 
-  abstract get _background(): Paint | null
+  abstract get _halfLeading(): boolean | null;
 
-  abstract get _foreground(): Paint | null
+  abstract get _locale(): string | null;
+
+  abstract get _foregroundColor(): InputColor | null
 
   abstract get _shadows(): TextShadow[] | null
 
@@ -292,22 +303,37 @@ export abstract class StyleNode {
 }
 
 export class ChildStyleNode extends StyleNode {
+
   constructor(readonly parent: StyleNode, readonly style: TextStyle) {
-    super(parent, style)
+    super()
+  }
+
+  get _backgroundColor(): InputColor {
+    return this.style.backgroundColor ?? this.parent._backgroundColor
+  }
+  get _decoration(): number {
+    return this.style.decoration ?? this.parent._decoration
+  }
+  get _heightMultiplier(): number {
+    return this.style.heightMultiplier ?? this.parent._heightMultiplier
+  }
+  get _halfLeading(): boolean {
+    return this.style.halfLeading ?? this.parent._halfLeading
+  }
+  get _locale(): string {
+    return this.style.locale ?? this.parent._locale
+  }
+  get _foregroundColor(): InputColor {
+    return this.style.foregroundColor ?? this.parent._foregroundColor
   }
 
   // Read these properties from the TextStyle associated with this node. If the
   // property isn't defined, go to the parent node.
-
-  get _color(): Color | null {
-    return this.style.color ?? (this._foreground == null ? this.parent._color : null);
+  get _color(): InputColor | null {
+    return this.style.color ?? (this._foregroundColor == null ? this.parent._color : null);
   }
 
-  // get _decoration(): TextDecoration | null {
-  //   return this.style.decoration ?? this.parent._decoration;
-  // }
-
-  get _decorationColor(): Color | null {
+  get _decorationColor(): InputColor | null {
     return this.style.decorationColor ?? this.parent._decorationColor;
   }
 
@@ -319,9 +345,9 @@ export class ChildStyleNode extends StyleNode {
     return this.style.decorationThickness ?? this.parent._decorationThickness;
   }
 
-  get _fontWeight(): FontWeight | null {
-    return this.style.fontWeight ?? this.parent._fontWeight;
-  }
+  // get _fontWeight(): FontWeight | null {
+  //   return this.style.fontWeight ?? this.parent._fontWeight;
+  // }
 
   get _fontStyle(): FontStyle | null {
     return this.style.fontStyle ?? this.parent._fontStyle;
@@ -331,9 +357,9 @@ export class ChildStyleNode extends StyleNode {
     return this.style.textBaseline ?? this.parent._textBaseline;
   }
 
-  get _fontFamilyFallback(): string[] | null {
-    return this.style.fontFamilyFallback ?? this.parent._fontFamilyFallback;
-  }
+  // get _fontFamilyFallback(): string[] | null {
+  //   return this.style.fontFamilyFallback ?? this.parent._fontFamilyFallback;
+  // }
 
   get _fontFeatures(): TextFontFeatures[] | null {
     return this.style.fontFeatures ?? this.parent._fontFeatures;
@@ -355,26 +381,6 @@ export class ChildStyleNode extends StyleNode {
     return this.style.wordSpacing ?? this.parent._wordSpacing;
   }
 
-  get _height(): number | null {
-    return this.style.height === ui.kTextHeightNone ? null : (this.style.height ?? this.parent._height);
-  }
-
-  // get _leadingDistribution(): TextLeadingDistribution | null {
-  //   return this.style.leadingDistribution ?? this.parent._leadingDistribution;
-  // }
-
-  // get _locale(): Locale | null {
-  //   return this.style.locale ?? this.parent._locale;
-  // }
-
-  get _background(): Paint | null {
-    return this.style.background ?? this.parent._background;
-  }
-
-  get _foreground(): Paint | null {
-    return this.style.foreground ?? this.parent._foreground;
-  }
-
   get _shadows(): TextShadow[] | null {
     return this.style.shadows ?? this.parent._shadows;
   }
@@ -390,29 +396,36 @@ export class ChildStyleNode extends StyleNode {
 * The root node of a style inheritance tree.
 */
 export class RootStyleNode extends StyleNode {
+
   constructor(readonly paragraphStyle: ParagraphStyle) {
-    super(null, paragraphStyle.textStyle!);
+    super()
   }
 
-  // constructor(paragraphStyle: ParagraphStyle) {
-  //   super(null, {
-  //     fontFamily: paragraphStyle.fontFamily,
-  //     fontSize: paragraphStyle.fontSize,
-  //     fontWeight: paragraphStyle.fontWeight,
-  //     fontStyle: paragraphStyle.fontStyle,
-  //     height: paragraphStyle.height,
-  //     locale: paragraphStyle.locale,
-  //   });
-  // }
-  get _color(): Color | null {
+  get _backgroundColor(): InputColor | null {
+    return null
+  }
+
+  get _decoration(): number {
+    return null
+  }
+
+  get _heightMultiplier(): number {
+    return null
+  }
+
+  get _halfLeading(): boolean {
+    return null
+  }
+
+  get _foregroundColor(): InputColor | null {
+    return null
+  }
+
+  get _color(): InputColor | null {
     return null;
   }
 
-  // get _decoration(): TextDecoration | null {
-  //   return null;
-  // }
-
-  get _decorationColor(): Color | null {
+  get _decorationColor(): InputColor | null {
     return null;
   }
 
@@ -436,13 +449,13 @@ export class RootStyleNode extends StyleNode {
     return null;
   }
 
-  get _fontFamily(): string {
-    return this.paragraphStyle.fontFamily ?? StyleManager.defaultFontFamily;
+  get _fontFamily(): string | null {
+    return this.paragraphStyle.fontFamily; //?? StyleManager.defaultFontFamily;
   }
 
-  get _fontFamilyFallback(): string[] | null {
-    return null;
-  }
+  // get _fontFamilyFallback(): string[] | null {
+  //   return null;
+  // }
 
   get _fontFeatures(): TextFontFeatures[] | null {
     return null;
@@ -452,8 +465,8 @@ export class RootStyleNode extends StyleNode {
     return null;
   }
 
-  get _fontSize(): number {
-    return this.paragraphStyle.fontSize ?? StyleManager.defaultFontSize;
+  get _fontSize(): number | null {
+    return this.paragraphStyle.fontSize; //?? StyleManager.defaultFontSize;
   }
 
   get _letterSpacing(): number | null {
@@ -472,16 +485,8 @@ export class RootStyleNode extends StyleNode {
   //   return null;
   // }
 
-  // get _locale(): Locale | null {
-  //   return this.paragraphStyle.locale ?? null;
-  // }
-
-  get _background(): Paint | null {
-    return null;
-  }
-
-  get _foreground(): Paint | null {
-    return null;
+  get _locale(): string | null {
+    return this.paragraphStyle.locale; //?? null;
   }
 
   get _shadows(): TextShadow[] | null {
@@ -489,8 +494,7 @@ export class RootStyleNode extends StyleNode {
   }
 }
 
-
-export class ParagraphBuilderJS   extends HostObject<"ParagraphBuilder">  implements CKParagraphBuilder {
+export class ParagraphBuilderJS extends HostObject<"ParagraphBuilder"> implements CKParagraphBuilder {
   _plainTextBuf = new StringBuffer();
   style: ParagraphStyleJS;
   fontSrc: TypefaceFontProviderJS;
@@ -503,7 +507,7 @@ export class ParagraphBuilderJS   extends HostObject<"ParagraphBuilder">  implem
   _rootStyleNode: RootStyleNode;
 
   get _currentStyleNode(): StyleNode {
-    return  this._styleStack.length == 0 ? this._rootStyleNode : this._styleStack[this._styleStack.length - 1];
+    return this._styleStack.length == 0 ? this._rootStyleNode : this._styleStack[this._styleStack.length - 1];
   }
 
   constructor(style: ParagraphStyle, fontSrc: TypefaceFontProvider) {
@@ -552,7 +556,7 @@ export class ParagraphBuilderJS   extends HostObject<"ParagraphBuilder">  implem
         height * scale,
         alignment,
         (offset ?? height) * scale,
-        baseline ?? TextBaselineEnum.Alphabetic
+        baseline ?? TextBaselineEnums.Alphabetic
       )
     );
   }
@@ -587,35 +591,45 @@ export class ParagraphBuilderJS   extends HostObject<"ParagraphBuilder">  implem
   setWordsUtf8(words: InputWords): void {
     throw new Error("Method not implemented.");
   }
+
   setWordsUtf16(words: InputWords): void {
     throw new Error("Method not implemented.");
   }
+
   setGraphemeBreaksUtf8(graphemes: InputGraphemes): void {
     throw new Error("Method not implemented.");
   }
+
   setGraphemeBreaksUtf16(graphemes: InputGraphemes): void {
     throw new Error("Method not implemented.");
   }
+
   setLineBreaksUtf8(lineBreaks: InputLineBreaks): void {
     throw new Error("Method not implemented.");
   }
+
   setLineBreaksUtf16(lineBreaks: InputLineBreaks): void {
     throw new Error("Method not implemented.");
   }
+
   getText(): string {
     throw new Error("Method not implemented.");
   }
+
   pop(): void {
-  if (this._styleStack.length != 0) {
+    if (this._styleStack.length != 0) {
       this._styleStack.pop();
     }
   }
+
   pushStyle(style: TextStyle): void {
-    this._styleStack.push(this._currentStyleNode.createChild(style as EngineTextStyle))
+    this._styleStack.push(this._currentStyleNode.createChild(style))
   }
+
   pushPaintStyle(textStyle: TextStyle, fg: Paint, bg: Paint): void {
     throw new Error("Method not implemented.");
   }
+
   reset(): void {
     throw new Error("Method not implemented.");
   }
@@ -631,7 +645,7 @@ export class ParagraphJS
   layoutService: TextLayoutService;
 
   constructor(
-    readonly span: ParagraphSpan[],
+    readonly spans: ParagraphSpan[],
     readonly paragraphStyle: ParagraphStyle,
     readonly plainText: string
   ) {
@@ -650,7 +664,6 @@ export class ParagraphJS
   }
   getClosestGlyphInfoAtCoordinate(dx: number, dy: number): GlyphInfo | null {
     return this.layoutService.getClosestGlyphInfo(dx, dy);
-    throw new Error("Method not implemented.");
   }
   getGlyphInfoAt(index: number): GlyphInfo | null {
     const numberOfLines = this.lines.length;
@@ -679,9 +692,10 @@ export class ParagraphJS
         // layout box has a better chance to be not that far-off.
         const textBox = fragment.toTextBox(range.start, range.end);
         return {
-          graphemeLayoutBounds: textBox.toRect(),
+          graphemeLayoutBounds: textBox.rect,
           graphemeClusterTextRange: range,
-          dir: textBox.direction,
+          dir: textBox.dir,
+          isEllipsis: false,
         };
       }
     }
@@ -693,9 +707,11 @@ export class ParagraphJS
   getHeight(): number {
     throw new Error("Method not implemented.");
   }
+
   getIdeographicBaseline(): number {
     throw new Error("Method not implemented.");
   }
+
   getLineNumberAt(index: number): number {
     return this._findLine(index, /*codeUnitOffset,*/ 0, this.lines.length);
     // throw new Error("Method not implemented.");
@@ -745,10 +761,10 @@ export class ParagraphJS
       return;
     }
     this.layoutService.performLayout(width);
-    // throw new Error("Method not implemented.");
     this.isLaidOut = true;
     this._lastUsedConstraints = width;
   }
+
   unresolvedCodepoints(): number[] {
     throw new Error("Method not implemented.");
   }
@@ -799,14 +815,23 @@ export class ParagraphJS
     );
   }
 
-  getWordBoundary(position: PositionWithAffinity): URange {
+
+  /**
+   * Finds the first and last glyphs that define a word containing the glyph at index offset.
+   * @param offset
+   */
+  getWordBoundary(offset: number): URange {
+    throw new Error("not implemented")
+  }
+
+  private getWordBoundary1(position: PositionWithAffinity): URange {
     let characterPosition: number;
 
     switch (position.affinity) {
-      case AffinityEnum.Upstream:
+      case AffinityEnums.Upstream:
         characterPosition = position.pos - 1;
         break;
-      case AffinityEnum.Downstream:
+      case AffinityEnums.Downstream:
         characterPosition = position.pos;
         break;
     }
@@ -823,7 +848,7 @@ export class ParagraphJS
     return { start: start, end: end };
   }
 
-  getLineBoundary(position: PositionWithAffinity): URange {
+  private getLineBoundary(position: PositionWithAffinity): URange {
     if (this.lines.length === 0) {
       return { start: 0, end: 0 }; //YourClass.emptyTextRange;
     }
@@ -842,6 +867,7 @@ export class ParagraphJS
     };
   }
 }
+
 export class ParagraphLine {
   /// Metrics for this line of the paragraph.
   readonly lineMetrics: LineMetricsJS;
@@ -1284,12 +1310,22 @@ export class TextPaintService {
       return;
     }
     // Paint the background of the box, if the span has a background.
-    const background = fragment.style.background; //as SurfacePaint?;
-    if (background != null) {
-      // final ui.Rect rect = fragment.toPaintingTextBox().toRect();
+    const backgroundColor = fragment.style.backgroundColor; //as SurfacePaint?;
+    // paint.setColor(backgroundColor)
+
+    if (backgroundColor != null) {
+      const paint = new CanvasKit.Paint()
+      paint.setColor(backgroundColor)
+      const rc = fragment.toPaintingTextBox().rect;
+      const l = rc[0]
+      const t = rc[1]
+      const r = rc[2]
+      const b = rc[3]
       // if (!rect.isEmpty) {
-      //     canvas.drawRect(rect.shift(offset), background.paintData);
-      // }
+      if (!((l == r) && (t == b))) {
+        const rr = [l + x, t + y, r + x, b + y] // rect.shift(offset)
+        canvas.drawRect(rr, paint);
+      }
     }
   }
 
@@ -1313,17 +1349,16 @@ export class TextPaintService {
 
     this._prepareCanvasForFragment(canvas, fragment);
 
-    // const fragmentX = fragment.textDirection! == ui.TextDirection.ltr ? fragment.left : fragment.right;
+    const fragmentX = fragment.textDirection == TextDirectionEnums.LTR ? fragment.left : fragment.right;
 
-    // const _x = x + line.left + fragmentX;
-    // const _y = y + line.baseline;
-    // const text = fragment.getText(this.paragraph);
+    const _x = x + line.left + fragmentX;
+    const _y = y + line.baseline;
+    const text = fragment.getText(this.paragraph);
+    console.log(_x, _y)
     const paint = new CanvasKit.Paint();
     paint.setColor(CanvasKit.CYAN);
     const font = new CanvasKit.Font();
-    console.log("aaahah");
-    canvas.drawText("Hello Roboto", 10, 50, paint, font);
-    // canvas.drawText(text, _x, _y, fragment.style.paint, fragment.style.font)
+    canvas.drawText(text, _x, _y, paint, font)
     // canvas.tearDownPaint
   }
 
@@ -1349,10 +1384,19 @@ export class TextLayoutService {
 
   lines: ParagraphLine[] = [];
 
-  constructor(readonly paragraph: ParagraphJS) { }
+  /// The bounds that contain the text painted inside this paragraph.
+  _paintBounds: Rect = Float32Array.of(0, 0, 0, 0);
+  get paintBounds(): Rect {
+    return this._paintBounds
+  }
 
-  getClosestGlyphInfo(dx: number, dy: number): GlyphInfo | null {
-    throw new Error("need implemented");
+  spanometer: Spanometer;
+
+  layoutFragmenter: LayoutFragmenter;
+
+  constructor(readonly paragraph: ParagraphJS) {
+    this.spanometer = new Spanometer(paragraph);
+    this.layoutFragmenter = new LayoutFragmenter(paragraph.plainText, paragraph.spans);
   }
 
   performLayout(width: number) {
@@ -1362,13 +1406,458 @@ export class TextLayoutService {
     this.minIntrinsicWidth = 0.0;
     this.maxIntrinsicWidth = 0.0;
     this.didExceedMaxLines = false;
-    this.lines = []
+    this.lines.length = 0
+
+    let currentLine = LineBuilder.first(this.paragraph, this.spanometer, this.width);
+
+    const fragments = this.layoutFragmenter.fragment();
+    fragments.forEach((fragment) => this.spanometer.measureFragment(fragment));
+
+    outerLoop:
+    for (let i = 0; i < fragments.length; i++) {
+      const fragment = fragments[i];
+      currentLine.addFragment(fragment);
+
+      while (currentLine.isOverflowing) {
+        if (currentLine.canHaveEllipsis) {
+          currentLine.insertEllipsis();
+          this.lines.push(currentLine.build());
+          this.didExceedMaxLines = true;
+          break outerLoop;
+        }
+
+        if (currentLine.isBreakable) {
+          currentLine.revertToLastBreakOpportunity();
+        } else {
+          // The line can't be legally broken, so the last fragment (that caused
+          // the line to overflow) needs to be force-broken.
+          currentLine.forceBreakLastFragment();
+        }
+
+        i += currentLine.appendZeroWidthFragments(fragments, i + 1);
+        this.lines.push(currentLine.build());
+        currentLine = currentLine.nextLine();
+      }
+
+      if (currentLine.isHardBreak) {
+        this.lines.push(currentLine.build());
+        currentLine = currentLine.nextLine();
+      }
+    }
+
+    const maxLines = this.paragraph.paragraphStyle.maxLines;
+    if (maxLines !== undefined && this.lines.length > maxLines) {
+      this.didExceedMaxLines = true;
+      // removeRange in Dart removes elements from start (inclusive) to end (exclusive)
+      // In JS/TS, we can use splice
+      this.lines.splice(maxLines, this.lines.length - maxLines);
+    }
+
+    // ***************************************************************** //
+    // *** PARAGRAPH BASELINE & HEIGHT & LONGEST LINE & PAINT BOUNDS *** //
+    // ***************************************************************** //
+
+    let boundsLeft = Number.POSITIVE_INFINITY; // double.infinity
+    let boundsRight = Number.NEGATIVE_INFINITY; // double.negativeInfinity
+    for (const line of this.lines) {
+      this.height += line.height;
+      if (this.alphabeticBaseline === -1.0) {
+        this.alphabeticBaseline = line.baseline;
+        this.ideographicBaseline = this.alphabeticBaseline * baselineRatioHack;
+      }
+      const longestLineWidth: number = this.longestLine?.width ?? 0.0;
+      if (longestLineWidth < line.width) {
+        this.longestLine = line;
+      }
+
+      const left: number = line.left;
+      if (left < boundsLeft) {
+        boundsLeft = left;
+      }
+      const right: number = left + line.width;
+      if (right > boundsRight) {
+        boundsRight = right;
+      }
+    }
+    // 假设 ui.Rect.fromLTRB 是可用的工厂方法
+    this._paintBounds = Float32Array.of(boundsLeft, 0, boundsRight, this.height) //   Rect.fromLTRB(boundsLeft, 0, boundsRight, this.height);
+
+    // **************************** //
+    // *** FRAGMENT POSITIONING *** //
+    // **************************** //
+
+    // We have to perform justification alignment first so that we can position
+    // fragments correctly later.
+    if (this.lines.length > 0) {
+      const shouldJustifyParagraph =
+        isFinite(this.width) && this.paragraph.paragraphStyle.textAlign === TextAlignEnums.Justify;
+
+      if (shouldJustifyParagraph) {
+        // Don't apply justification to the last line.
+        for (let i = 0; i < this.lines.length - 1; i++) {
+          for (const fragment of this.lines[i].fragments) {
+            fragment.justifyTo(this.width);
+          }
+        }
+      }
+    }
+
+    this.lines.forEach((line) => this._positionLineFragments(line));
+
+    // ******************************** //
+    // *** MAX/MIN INTRINSIC WIDTHS *** //
+    // ******************************** //
+
+    // TODO(mdebbar): Handle maxLines https://github.com/flutter/flutter/issues/91254
+
+    let runningMinIntrinsicWidth: number = 0;
+    let runningMaxIntrinsicWidth: number = 0;
+
+    for (const fragment of fragments) {
+      runningMinIntrinsicWidth += fragment.widthExcludingTrailingSpaces;
+      // Max intrinsic width includes the width of trailing spaces.
+      runningMaxIntrinsicWidth += fragment.widthIncludingTrailingSpaces;
+
+      switch (fragment.type) {
+        case LineBreakType.prohibited:
+          break;
+
+        case LineBreakType.opportunity:
+          this.minIntrinsicWidth = Math.max(this.minIntrinsicWidth, runningMinIntrinsicWidth);
+          runningMinIntrinsicWidth = 0;
+          break;
+
+        case LineBreakType.mandatory:
+        case LineBreakType.endOfText:
+          this.minIntrinsicWidth = Math.max(this.minIntrinsicWidth, runningMinIntrinsicWidth);
+          this.maxIntrinsicWidth = Math.max(this.maxIntrinsicWidth, runningMaxIntrinsicWidth);
+          runningMinIntrinsicWidth = 0;
+          runningMaxIntrinsicWidth = 0;
+          break;
+      }
+    }
   }
+
+  get _paragraphDirection() {
+    return this.paragraph.paragraphStyle.effectiveTextDirection;
+  }
+
+  /// Positions the fragments taking into account their directions and the
+  /// paragraph's direction.
+  _positionLineFragments(line: ParagraphLine): void {
+    let previousDirection = this._paragraphDirection;
+
+    let startOffset: number = 0.0;
+    let sandwichStart: number | null = null; // Dart 的 int? 对应 TS 的 number | null
+    let sequenceStart: number = 0;
+
+    for (let i = 0; i <= line.fragments.length; i++) {
+      if (i < line.fragments.length) {
+        const fragment = line.fragments[i];
+
+        if (fragment.fragmentFlow === FragmentFlow.previous) {
+          sandwichStart = null;
+          continue;
+        }
+        if (fragment.fragmentFlow === FragmentFlow.sandwich) {
+          sandwichStart ??= i;
+          continue;
+        }
+
+        if (!(fragment.fragmentFlow === FragmentFlow.ltr || fragment.fragmentFlow === FragmentFlow.rtl)) {
+          console.error("Assertion failed: fragment.fragmentFlow is not ltr or rtl");
+          // 或者 throw new Error(...);
+          continue; // 或根据策略处理
+        }
+
+        const currentDirection = fragment.fragmentFlow === FragmentFlow.ltr ? TextDirectionEnums.LTR : TextDirectionEnums.RTL;
+
+        if (currentDirection === previousDirection) {
+          sandwichStart = null;
+          continue;
+        }
+      }
+
+      // We've reached a fragment that'll flip the text direction. Let's
+      // position the sequence that we've been traversing.
+
+      if (sandwichStart === null) {
+        // Position fragments in range [sequenceStart:i)
+        startOffset += this._positionFragmentRange({
+          line: line,
+          start: sequenceStart,
+          end: i,
+          direction: previousDirection,
+          startOffset: startOffset,
+        });
+      } else {
+        // Position fragments in range [sequenceStart:sandwichStart)
+        startOffset += this._positionFragmentRange({
+          line: line,
+          start: sequenceStart,
+          end: sandwichStart,
+          direction: previousDirection,
+          startOffset: startOffset,
+        });
+        // Position fragments in range [sandwichStart:i)
+        startOffset += this._positionFragmentRange({
+          line: line,
+          start: sandwichStart,
+          end: i,
+          direction: this._paragraphDirection,
+          startOffset: startOffset,
+        });
+      }
+
+      sequenceStart = i;
+      sandwichStart = null;
+
+      if (i < line.fragments.length) {
+        previousDirection = line.fragments[i].textDirection!;
+      }
+    }
+  }
+
+  /**
+   * 定位一行中指定范围内的片段。
+   * @param args 包含行、起始索引、结束索引、方向和起始偏移量的对象。
+   * @returns 范围内所有片段的总宽度。
+   */
+  _positionFragmentRange(args: {
+    line: ParagraphLine;
+    start: number;
+    end: number;
+    direction: TextDirection;
+    startOffset: number;
+  }): number {
+    const { line, start, end, direction, startOffset } = args;
+
+    console.assert(start <= end, "Assertion failed: start > end in _positionFragmentRange")
+    let cumulativeWidth: number = 0.0;
+
+    // The bodies of the two for loops below must remain identical. The only
+    // difference is the looping direction. One goes from start to end, while
+    // the other goes from end to start.
+
+    if (direction === this._paragraphDirection) {
+      for (let i = start; i < end; i++) {
+        cumulativeWidth += this._positionOneFragment(line, i, startOffset + cumulativeWidth, direction);
+      }
+    } else {
+      for (let i = end - 1; i >= start; i--) {
+        cumulativeWidth += this._positionOneFragment(line, i, startOffset + cumulativeWidth, direction);
+      }
+    }
+
+    return cumulativeWidth;
+  }
+
+  /**
+   * 定位单个片段。
+   * @param line 片段所在的行。
+   * @param i 片段在行片段数组中的索引。
+   * @param startOffset 片段的起始 X 偏移量。
+   * @param direction 片段的文本方向。
+   * @returns 片段的宽度（包括尾随空格）。
+   */
+  _positionOneFragment(
+    line: ParagraphLine,
+    i: number,
+    startOffset: number,
+    direction: TextDirection
+  ): number {
+    const fragment = line.fragments[i];
+    fragment.setPosition(startOffset, direction);
+    return fragment.widthIncludingTrailingSpaces;
+  }
+
+  /**
+   * 获取段落中所有占位符的 TextBox 列表。
+   * @returns 包含占位符 TextBox 的数组。
+   */
+  getBoxesForPlaceholders(): RectWithDirection[] {
+    const boxes = [];
+    for (const line of this.lines) {
+      for (const fragment of line.fragments) {
+        if (fragment.isPlaceholder) {
+          boxes.push(fragment.toTextBox());
+        }
+      }
+    }
+    return boxes;
+  }
+
+  /**
+   * 获取指定文本范围的 TextBox 列表。
+   * @param start 范围的起始索引（包含）。
+   * @param end 范围的结束索引（不包含）。
+   * @param boxHeightStyle 高度样式（假设已定义）。
+   * @param boxWidthStyle 宽度样式（假设已定义）。
+   * @returns 包含范围 TextBox 的数组。
+   */
+  getBoxesForRange(
+    start: number,
+    end: number,
+    // boxHeightStyle: BoxHeightStyle,
+    // boxWidthStyle: BoxWidthStyle
+  ): RectWithDirection[] {
+    // Zero-length ranges and invalid ranges return an empty list.
+    if (start >= end || start < 0 || end < 0) {
+      return [];
+    }
+
+    const length = this.paragraph.plainText.length;
+    // Ranges that are out of bounds should return an empty list.
+    if (start > length || end > length) {
+      return [];
+    }
+
+    const boxes = [];
+
+    for (const line of this.lines) {
+      if (line.overlapsWith(start, end)) {
+        for (const fragment of line.fragments) {
+          // 假设 LayoutFragment 有 isPlaceholder 和 overlapsWith 方法/属性
+          if (!fragment.isPlaceholder && fragment.overlapsWith(start, end)) {
+            boxes.push(fragment.toTextBox(start, end));
+          }
+        }
+      }
+    }
+    return boxes;
+  }
+
+  /**
+   * 根据给定的偏移量获取对应的文本位置。
+   * @param offset 偏移量。
+   * @returns 对应的 TextPosition。
+   */
+  getPositionForOffset(dx: number, dy: number): PositionWithAffinity /*ui.TextPosition*/ {
+    // After layout, each line has boxes that contain enough information to make
+    // it possible to do hit testing. Once we find the box, we look inside that
+    // box to find where exactly the `offset` is located.
+    const line = this._findLineForY(dy);
+    if (line === null) {
+      return { pos: 0, affinity: AffinityEnums.Downstream };
+    }
+    // [offset] is to the left of the line.
+    if (dx <= line.left) {
+      return { pos: line.startIndex, affinity: AffinityEnums.Downstream };
+      // return new ui.TextPosition({ offset: line.startIndex });
+    }
+
+    // [offset] is to the right of the line.
+    if (dx >= line.left + line.widthWithTrailingSpaces) {
+      return { pos: line.endIndex - line.trailingNewlines, affinity: AffinityEnums.Upstream };
+      // return new ui.TextPosition({
+      //     offset: line.endIndex - line.trailingNewlines,
+      //     affinity: ui.TextAffinity.upstream,
+      // });
+    }
+
+    const _dx = dx - line.left;
+    for (const fragment of line.fragments) {
+      if (fragment.left <= _dx && _dx <= fragment.right) {
+        return fragment.getPositionForX(_dx - fragment.left);
+      }
+    }
+    // Is this ever reachable?
+    return { pos: line.startIndex, affinity: AffinityEnums.Downstream };
+  }
+
+  /**
+   * 获取给定偏移量处最接近的字形信息。
+   * @param offset 偏移量。
+   * @returns 最接近的 GlyphInfo，如果找不到则返回 null。
+   */
+  getClosestGlyphInfo(dx: number, dy: number): GlyphInfo | null {
+    const line: ParagraphLine | null = this._findLineForY(dy);
+    if (line === null) {
+      return null;
+    }
+    const fragment: LayoutFragment | null = line.closestFragmentAtOffset(dx - line.left);
+    if (fragment === null) {
+      return null;
+    }
+
+    const closestGraphemeStartInFragment =
+      !fragment.hasLeadingBrokenGrapheme ||
+      dx <= fragment.line.left ||
+      fragment.line.left + fragment.line.width <= dx ||
+      (() => {
+        switch (fragment.textDirection!) { // 非空断言
+          // If dx is closer to the trailing edge, no need to check other fragments.
+          case TextDirectionEnums.LTR:
+            return dx >= fragment.line.left + (fragment.left + fragment.right) / 2;
+          case TextDirectionEnums.RTL:
+            return dx <= fragment.line.left + (fragment.left + fragment.right) / 2;
+          default:
+            // 处理意外的 direction 值
+            return false;
+        }
+      })();
+
+    const candidate1 = fragment.getClosestCharacterBox(dx);
+    if (closestGraphemeStartInFragment) {
+      return candidate1;
+    }
+
+    const searchLeft = (() => {
+      switch (fragment.textDirection!) {
+        case TextDirectionEnums.LTR:
+          return true;
+        case TextDirectionEnums.RTL:
+          return false;
+        default:
+          return true;
+      }
+    })();
+
+    const candidate2 = fragment.line
+      .closestFragmentTo(fragment, searchLeft)
+      ?.getClosestCharacterBox(dx);
+
+    if (candidate2 === null) {
+      return candidate1;
+    }
+
+    const distance1: number = Math.min(
+      Math.abs(candidate1.graphemeClusterTextRange.start - dx),
+      Math.abs(candidate1.graphemeClusterTextRange.end - dx),
+    );
+    const distance2: number = Math.min(
+      Math.abs(candidate2.graphemeClusterTextRange.start - dx),
+      Math.abs(candidate2.graphemeClusterTextRange.end - dx),
+    );
+    return distance2 > distance1 ? candidate1 : candidate2;
+  }
+
+  /**
+   * 根据 Y 坐标查找对应的行。
+   * @param y Y 坐标。
+   * @returns 对应的 ParagraphLine，如果未找到则返回 null。
+   */
+  _findLineForY(y: number): ParagraphLine | null {
+    if (this.lines.length === 0) {
+      return null;
+    }
+    // We could do a binary search here but it's not worth it because the number
+    // of line is typically low, and each iteration is a cheap comparison of
+    // doubles.
+    for (const line of this.lines) {
+      if (y <= line.height) {
+        return line;
+      }
+      y -= line.height;
+    }
+    return this.lines[this.lines.length - 1];
+  }
+
 }
 
 export class ParagraphSpan {
   constructor(
-    readonly style: TextStyleJS,
+    readonly style: TextStyle,
     readonly start: number,
     readonly end: number
   ) { }
