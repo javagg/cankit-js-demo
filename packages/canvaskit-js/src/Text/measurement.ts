@@ -6,6 +6,78 @@
 //                anything as of this writing.
 export const baselineRatioHack = 1.1662499904632568;
 
+/// Hosts ruler DOM elements in a hidden container under [DomManager.renderingHost].
+export class RulerHost {
+    /**
+     * 托管用于测量文本的测量器缓存。
+     *
+     * 此元素纯粹出于组织目的而存在。否则，测量器将附加到 `<body>` 元素上，
+     * 从而污染元素树并使其难以导航。它不提供任何功能目的。
+     */
+    private _rulerHost: HTMLElement;
+
+    /**
+     * 标记此 RulerHost 是否已被释放。
+     */
+    private _isDisposed: boolean = false;
+
+    constructor() {
+        this._rulerHost = createDomElement('flt-ruler-host');
+
+        const style: CSSStyleDeclaration = (this._rulerHost as HTMLElement).style; // 安全转换以访问 style
+        style.position = 'fixed';
+        style.visibility = 'hidden';
+        style.overflow = 'hidden';
+        style.top = '0';
+        style.left = '0';
+        style.width = '0';
+        style.height = '0';
+
+        // TODO(mdebbar): 可能存在多个视图和多个渲染宿主。
+        //                https://github.com/flutter/flutter/issues/137344
+        // 注意：需要处理 EnginePlatformDispatcher.instance,
+        // implicitView 或 renderingHost 为 null 的情况
+        const instance = EnginePlatformDispatcher.instance;
+        if (instance && instance.implicitView && instance.implicitView.dom && instance.implicitView.dom.renderingHost) {
+            const renderingHost: DomNode = instance.implicitView.dom.renderingHost;
+            renderingHost.appendChild(this._rulerHost);
+        } else {
+            // 降级处理：如果无法找到 renderingHost，可以附加到 document.body
+            // 或者抛出错误，取决于应用策略
+            console.warn('Rendering host not found, appending RulerHost to document.body');
+            document.body.appendChild(this._rulerHost);
+            // throw new Error('Rendering host not available');
+        }
+
+        // 注册热重启监听器，以便在热重启时清理资源
+        registerHotRestartListener(() => this.dispose());
+    }
+
+    /**
+     * 释放此 [RulerHost] 使用的资源。
+     *
+     * 调用此方法后，此对象将不再可用。
+     */
+    dispose(): void {
+        // 防止重复 dispose
+        if (!this._isDisposed) {
+            this._rulerHost.remove(); // 从 DOM 中移除
+            this._isDisposed = true;
+        }
+    }
+
+    /**
+     * 将用于测量文本的元素添加为 [_rulerHost] 的子元素。
+     * @param element 要添加的 HTMLElement。
+     */
+    addElement(element: HTMLElement): void {
+        // 检查是否已被 dispose
+        if (this._isDisposed) {
+            throw new Error('RulerHost has been disposed and is no longer usable.');
+        }
+        this._rulerHost.appendChild(element);
+    }
+}
 // These global variables are used to memoize calls to [measureSubstring]. They
 // are used to remember the last arguments passed to it, and the last return
 // value.

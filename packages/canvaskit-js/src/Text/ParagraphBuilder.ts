@@ -19,20 +19,21 @@ import type {
   ParagraphStyle,
   TypefaceFontProvider,
   Canvas,
+  TextDirection,
 } from "canvaskit-wasm";
 import { HostObject } from "../HostObject";
 import { StringBuffer } from "./sb";
-import { LayoutFragment } from "./layout_fragmenter";
+import { EllipsisFragment, LayoutFragment } from "./layout_fragmenter";
 import { PaintJS } from "../Paint";
 import { FontJS } from "./Font";
-import { Affinity as AffinityEnum, TextBaselineEnum } from "../Core";
+import { Affinity as AffinityEnum, PlaceholderAlignment as PlaceholderAlignmentEnums, TextAlign as TextAlignEnums, TextBaselineEnum, TextDirection as TextDirectionEnums } from "../Core";
 import { WordBreaker } from "./word_breaker";
 import {
   ParagraphStyle as ParagraphStyleJS,
   TextStyle as TextStyleJS,
 } from "./ParagraphStyle";
 import { TypefaceFontProviderJS } from "./TypefaceFont";
-import { measureSubstring } from "./measurement";
+import { measureSubstring, RulerHost } from "./measurement";
 
 // export const ParagraphBuilder: CKParagraphBuilder = {
 //     addPlaceholder: function (width?: number, height?: number, alignment?: PlaceholderAlignment, baseline?: TextBaseline, offset?: number): void {
@@ -172,23 +173,22 @@ import { measureSubstring } from "./measurement";
 // }
 
 function createDomCanvasElement(width: number, height: number) {
-    const ele = new HTMLCanvasElement()
-    ele.width = width
-    ele.height = height
-    return ele
+  const ele = new HTMLCanvasElement()
+  ele.width = width
+  ele.height = height
+  return ele
 }
 
 // We don't use this canvas to draw anything, so let's make it as small as
 // possible to save memory.
-const  textContext = createDomCanvasElement(0,0).getContext("2d")
+const textContext = createDomCanvasElement(0, 0).getContext("2d")
 
 const placeholderChar = String.fromCharCode(0xfffc);
 const scale = 1.0;
 
 export class ParagraphBuilderJS
   extends HostObject<"ParagraphBuilder">
-  implements CKParagraphBuilder
-{
+  implements CKParagraphBuilder {
   _plainTextBuf = new StringBuffer();
   style: ParagraphStyleJS;
   fontSrc: TypefaceFontProviderJS;
@@ -312,8 +312,7 @@ export class ParagraphBuilderJS
 
 export class ParagraphJS
   extends HostObject<"Paragraph">
-  implements CKParagraph
-{
+  implements CKParagraph {
   isLaidOut = false;
   _lastUsedConstraints: number;
   paintService: TextPaintService;
@@ -473,7 +472,7 @@ export class ParagraphJS
       console.assert(this.lines[startLine].startIndex <= codeUnitOffset);
       console.assert(
         endLine === numberOfLines ||
-          codeUnitOffset < this.lines[endLine].startIndex
+        codeUnitOffset < this.lines[endLine].startIndex
       );
       return codeUnitOffset >= this.lines[startLine].visibleEndIndex
         ? null
@@ -533,394 +532,421 @@ export class ParagraphJS
   }
 }
 export class ParagraphLine {
-    /// Metrics for this line of the paragraph.
-    readonly lineMetrics: EngineLineMetrics;
+  /// Metrics for this line of the paragraph.
+  readonly lineMetrics: LineMetrics;
 
-    /// The index (inclusive) in the text where this line begins.
-    readonly startIndex: number;
+  /// The index (inclusive) in the text where this line begins.
+  readonly startIndex: number;
 
-    /// The index (exclusive) in the text where this line ends.
-    readonly endIndex: number;
+  /// The index (exclusive) in the text where this line ends.
+  ///
+  /// When the line contains an overflow, then [endIndex] goes until the end of
+  /// the text and doesn't stop at the overflow cutoff.
+  readonly endIndex: number;
 
-    /// The largest visible index (exclusive) in this line.
-    private _visibleEndIndex: number | null = null;
-    get visibleEndIndex(): number {
-        if (this._visibleEndIndex === null) {
-            this._visibleEndIndex = (() => {
-                if (this.fragments.length === 0) {
-                    return this.startIndex;
-                }
-                
-                // 检查最后一个片段是否是EllipsisFragment
-                const lastFragment = this.fragments[this.fragments.length - 1];
-                if (this._isEllipsisFragment(lastFragment)) {
-                    if (this.fragments.length === 1) {
-                        return this.startIndex;
-                    }
-                    return this.fragments[this.fragments.length - 2].end;
-                }
-                
-                return this.fragments[this.fragments.length - 1].end;
-            })();
-        }
-        return this._visibleEndIndex;
-    }
-
-    /// The number of new line characters at the end of the line.
-    readonly trailingNewlines: number;
-
-    /// The number of spaces at the end of the line.
-    readonly trailingSpaces: number;
-
-    /// The number of space characters in the entire line.
-    readonly spaceCount: number;
-
-    /// The full width of the line including all trailing space but not new lines.
-    readonly widthWithTrailingSpaces: number;
-
-    /// The fragments that make up this line.
-    readonly fragments: LayoutFragment[];
-
-    /// The text direction of this line, which is the same as the paragraph's.
-    readonly textDirection: TextDirection;
-
-    /// The text to be rendered on the screen representing this line.
-    readonly displayText: string | null;
-
-    /// The [CanvasParagraph] this line is part of.
-    readonly paragraph: CanvasParagraph;
-
-    constructor(options: {
-        hardBreak: boolean;
-        ascent: number;
-        descent: number;
-        height: number;
-        width: number;
-        left: number;
-        baseline: number;
-        lineNumber: number;
-        startIndex: number;
-        endIndex: number;
-        trailingNewlines: number;
-        trailingSpaces: number;
-        spaceCount: number;
-        widthWithTrailingSpaces: number;
-        fragments: LayoutFragment[];
-        textDirection: TextDirection;
-        paragraph: ParagraphJS;
-        displayText?: string | null;
-    }) {
-        console.assert(options.trailingNewlines <= options.endIndex - options.startIndex);
-        
-        this.lineMetrics = {
-            hardBreak: options.hardBreak,
-            ascent: options.ascent,
-            descent: options.descent,
-            unscaledAscent: options.ascent,
-            height: options.height,
-            width: options.width,
-            left: options.left,
-            baseline: options.baseline,
-            lineNumber: options.lineNumber,
-        };
-        
-        this.startIndex = options.startIndex;
-        this.endIndex = options.endIndex;
-        this.trailingNewlines = options.trailingNewlines;
-        this.trailingSpaces = options.trailingSpaces;
-        this.spaceCount = options.spaceCount;
-        this.widthWithTrailingSpaces = options.widthWithTrailingSpaces;
-        this.fragments = options.fragments;
-        this.textDirection = options.textDirection;
-        this.paragraph = options.paragraph;
-        this.displayText = options.displayText ?? null;
-    }
-
-    /// The number of space characters in the line excluding trailing spaces.
-    get nonTrailingSpaces(): number {
-        return this.spaceCount - this.trailingSpaces;
-    }
-
-    // Convenient getters for line metrics properties.
-    get hardBreak(): boolean { return this.lineMetrics.hardBreak; }
-    get ascent(): number { return this.lineMetrics.ascent; }
-    get descent(): number { return this.lineMetrics.descent; }
-    get unscaledAscent(): number { return this.lineMetrics.unscaledAscent; }
-    get height(): number { return this.lineMetrics.height; }
-    get width(): number { return this.lineMetrics.width; }
-    get left(): number { return this.lineMetrics.left; }
-    get baseline(): number { return this.lineMetrics.baseline; }
-    get lineNumber(): number { return this.lineMetrics.lineNumber; }
-
-    overlapsWith(startIndex: number, endIndex: number): boolean {
-        return startIndex < this.endIndex && this.startIndex < endIndex;
-    }
-
-    getText(paragraph: ParagraphJS): string {
-        const buffer: string[] = [];
-        for (const fragment of this.fragments) {
-            buffer.push(fragment.getText(paragraph));
-        }
-        return buffer.join('');
-    }
-
-    // This is the fallback graphme breaker that is only used if Intl.Segmenter()
-    // is not supported so _fromDomSegmenter can't be called. This implementation
-    // breaks the text into UTF-16 codepoints instead of graphme clusters.
-    private _fallbackGraphemeStartIterable(lineText: string): number[] {
-        const graphemeStarts: number[] = [];
-        let precededByHighSurrogate = false;
-        for (let i = 0; i < lineText.length; i++) {
-            const maskedCodeUnit = lineText.charCodeAt(i) & 0xFC00;
-            // Only skip `i` if it points to a low surrogate in a valid surrogate pair.
-            if (maskedCodeUnit !== 0xDC00 || !precededByHighSurrogate) {
-                graphemeStarts.push(this.startIndex + i);
-            }
-            precededByHighSurrogate = maskedCodeUnit === 0xD800;
-        }
-        return graphemeStarts;
-    }
-
-    // This will be called at most once to lazily populate _graphemeStarts.
-    private _fromDomSegmenter(fragmentText: string): number[] {
-        const domSegmenter: DomSegmenter = createIntlSegmenter({ granularity: 'grapheme' });
-        const graphemeStarts: number[] = [];
-        const segments = domSegmenter.segment(fragmentText).iterator();
-        while (segments.moveNext()) {
-            graphemeStarts.push(segments.current.index + this.startIndex);
-        }
-        console.assert(graphemeStarts.length === 0 || graphemeStarts[0] === this.startIndex);
-        return graphemeStarts;
-    }
-
-    private _breakTextIntoGraphemes(text: string): number[] {
-        const graphemeStarts: number[] = 
-            domIntl.Segmenter == null ? this._fallbackGraphemeStartIterable(text) : this._fromDomSegmenter(text);
-        // Add the end index of the fragment to the list if the text is not empty.
-        if (graphemeStarts.length > 0) {
-            graphemeStarts.push(this.visibleEndIndex);
-        }
-        return graphemeStarts;
-    }
-
-    private _graphemeStarts: number[] | null = null;
-    /// This List contains an ascending sequence of UTF16 offsets that points to
-    /// grapheme starts within the line. Each UTF16 offset is relative to the
-    /// start of the paragraph, instead of the start of the line.
-    get graphemeStarts(): number[] {
-        if (this._graphemeStarts === null) {
-            this._graphemeStarts = 
-                this.visibleEndIndex === this.startIndex
-                    ? []
-                    : this._breakTextIntoGraphemes(this.paragraph.plainText.substring(this.startIndex, this.visibleEndIndex));
-        }
-        return this._graphemeStarts;
-    }
-
-    /// Translate a UTF16 code unit in the paragaph (`offset`), to a grapheme
-    /// offset with in the current line.
-    ///
-    /// The `start` and `end` parameters are both grapheme offsets within the
-    /// current line. They are used to limit the search range (so the return value
-    /// that corresponds to the code unit `offset` must be with in [start, end)).
-    graphemeStartIndexBefore(offset: number, start: number, end: number): number {
-        let low = start;
-        let high = end;
-        console.assert(0 <= low);
-        console.assert(low < high);
-
-        const lineGraphemeBreaks: number[] = this.graphemeStarts;
-        console.assert(offset >= lineGraphemeBreaks[start]);
-        console.assert(offset < lineGraphemeBreaks[lineGraphemeBreaks.length - 1], `${offset}, ${lineGraphemeBreaks}`);
-        console.assert(end === lineGraphemeBreaks.length || offset < lineGraphemeBreaks[end]);
-        
-        while (low + 2 <= high) {
-            // high >= low + 2, so low + 1 <= mid <= high - 1
-            const mid = Math.floor((low + high) / 2);
-            const diff = lineGraphemeBreaks[mid] - offset;
-            
-            if (diff > 0) {
-                high = mid;
-            } else if (diff < 0) {
-                low = mid;
-            } else {
-                return mid;
-            }
+  /// The largest visible index (exclusive) in this line.
+  ///
+  /// When the line contains an overflow, or is ellipsized at the end, this is
+  /// the largest index that remains visible in this line. If the entire line is
+  /// ellipsized, this returns [startIndex];
+  private _visibleEndIndex: number | null = null;
+  get visibleEndIndex(): number {
+    if (this._visibleEndIndex === null) {
+      this._visibleEndIndex = (() => {
+        if (this.fragments.length === 0) {
+          return this.startIndex;
         }
 
-        console.assert(lineGraphemeBreaks[low] <= offset);
-        console.assert(high === lineGraphemeBreaks.length || offset < lineGraphemeBreaks[high]);
-        return low;
-    }
-
-    /// Returns the UTF-16 range of the character that encloses the code unit at
-    /// the given offset.
-    getCharacterRangeAt(codeUnitOffset: number): URange | null {
-        console.assert(codeUnitOffset >= this.startIndex);
-        if (codeUnitOffset >= this.visibleEndIndex || this.graphemeStarts.length === 0) {
-            return null;
+        // 检查最后一个片段是否是EllipsisFragment
+        const lastFragment = this.fragments[this.fragments.length - 1];
+        if (this._isEllipsisFragment(lastFragment)) {
+          if (this.fragments.length === 1) {
+            return this.startIndex;
+          }
+          return this.fragments[this.fragments.length - 2].end;
         }
 
-        const startIndex = this.graphemeStartIndexBefore(codeUnitOffset, 0, this.graphemeStarts.length);
-        console.assert(startIndex < this.graphemeStarts.length - 1);
-        return {
-            start: this.graphemeStarts[startIndex], 
-            end: this.graphemeStarts[startIndex + 1]
-        };
+        return this.fragments[this.fragments.length - 1].end;
+      })();
+    }
+    return this._visibleEndIndex;
+  }
+
+  /// The number of new line characters at the end of the line.
+  readonly trailingNewlines: number;
+
+  /// The number of spaces at the end of the line.
+  readonly trailingSpaces: number;
+
+  /// The number of space characters in the entire line.
+  readonly spaceCount: number;
+
+  /// The full width of the line including all trailing space but not new lines.
+  ///
+  /// The difference between [width] and [widthWithTrailingSpaces] is that
+  /// [widthWithTrailingSpaces] includes trailing spaces in the width
+  /// calculation while [width] doesn't.
+  ///
+  /// For alignment purposes for example, the [width] property is the right one
+  /// to use because trailing spaces shouldn't affect the centering of text.
+  /// But for placing cursors in text fields, we do care about trailing
+  /// spaces so [widthWithTrailingSpaces] is more suitable.
+  readonly widthWithTrailingSpaces: number;
+
+  /// The fragments that make up this line.
+  ///
+  /// The fragments in the [List] are sorted by their logical order in within the
+  /// line. In other words, a [LayoutFragment] in the [List] will have larger
+  /// start and end indices than all [LayoutFragment]s that appear before it.
+  readonly fragments: LayoutFragment[];
+
+  /// The text direction of this line, which is the same as the paragraph's.
+  readonly textDirection: TextDirection;
+
+  /// The text to be rendered on the screen representing this line.
+  readonly displayText?: string;
+
+  /// The [CanvasParagraph] this line is part of.
+  readonly paragraph: ParagraphJS;
+
+  constructor(options: {
+    hardBreak: boolean;
+    ascent: number;
+    descent: number;
+    height: number;
+    width: number;
+    left: number;
+    baseline: number;
+    lineNumber: number;
+    startIndex: number;
+    endIndex: number;
+    trailingNewlines: number;
+    trailingSpaces: number;
+    spaceCount: number;
+    widthWithTrailingSpaces: number;
+    fragments: LayoutFragment[];
+    textDirection: TextDirection;
+    paragraph: ParagraphJS;
+    displayText?: string | null;
+  }) {
+    console.assert(options.trailingNewlines <= options.endIndex - options.startIndex);
+
+    this.lineMetrics = {
+      startIndex: options.startIndex,
+      endIndex: options.endIndex,
+      endExcludingWhitespaces: options.trailingSpaces,
+      endIncludingNewline: options.trailingNewlines,
+      isHardBreak: options.hardBreak,
+      ascent: options.ascent,
+      descent: options.descent,
+      // unscaledAscent: options.ascent,
+      height: options.height,
+      width: options.width,
+      left: options.left,
+      baseline: options.baseline,
+      lineNumber: options.lineNumber,
+    };
+
+    this.startIndex = options.startIndex;
+    this.endIndex = options.endIndex;
+    this.trailingNewlines = options.trailingNewlines;
+    this.trailingSpaces = options.trailingSpaces;
+    this.spaceCount = options.spaceCount;
+    this.widthWithTrailingSpaces = options.widthWithTrailingSpaces;
+    this.fragments = options.fragments;
+    this.textDirection = options.textDirection;
+    this.paragraph = options.paragraph;
+    this.displayText = options.displayText ?? null;
+  }
+
+  /// The number of space characters in the line excluding trailing spaces.
+  get nonTrailingSpaces(): number {
+    return this.spaceCount - this.trailingSpaces;
+  }
+
+  // Convenient getters for line metrics properties.
+  get hardBreak(): boolean { return this.lineMetrics.isHardBreak; }
+  get ascent(): number { return this.lineMetrics.ascent; }
+  get descent(): number { return this.lineMetrics.descent; }
+  // get unscaledAscent(): number { return this.lineMetrics.unscaledAscent; }
+  get height(): number { return this.lineMetrics.height; }
+  get width(): number { return this.lineMetrics.width; }
+  get left(): number { return this.lineMetrics.left; }
+  get baseline(): number { return this.lineMetrics.baseline; }
+  get lineNumber(): number { return this.lineMetrics.lineNumber; }
+
+  overlapsWith(startIndex: number, endIndex: number): boolean {
+    return startIndex < this.endIndex && this.startIndex < endIndex;
+  }
+
+  getText(paragraph: ParagraphJS): string {
+    const buffer: string[] = [];
+    for (const fragment of this.fragments) {
+      buffer.push(fragment.getText(paragraph));
+    }
+    return buffer.join('');
+  }
+
+  // This is the fallback graphme breaker that is only used if Intl.Segmenter()
+  // is not supported so _fromDomSegmenter can't be called. This implementation
+  // breaks the text into UTF-16 codepoints instead of graphme clusters.
+  private _fallbackGraphemeStartIterable(lineText: string): number[] {
+    const graphemeStarts: number[] = [];
+    let precededByHighSurrogate = false;
+    for (let i = 0; i < lineText.length; i++) {
+      const maskedCodeUnit = lineText.charCodeAt(i) & 0xFC00;
+      // Only skip `i` if it points to a low surrogate in a valid surrogate pair.
+      if (maskedCodeUnit !== 0xDC00 || !precededByHighSurrogate) {
+        graphemeStarts.push(this.startIndex + i);
+      }
+      precededByHighSurrogate = maskedCodeUnit === 0xD800;
+    }
+    return graphemeStarts;
+  }
+
+  // This will be called at most once to lazily populate _graphemeStarts.
+  private _fromDomSegmenter(fragmentText: string): number[] {
+    const domSegmenter: Segmenter = createIntlSegmenter({ granularity: 'grapheme' });
+    const graphemeStarts: number[] = [];
+    const segments = domSegmenter.segment(fragmentText).iterator();
+    while (segments.moveNext()) {
+      graphemeStarts.push(segments.current.index + this.startIndex);
+    }
+    console.assert(graphemeStarts.length === 0 || graphemeStarts[0] === this.startIndex);
+    return graphemeStarts;
+  }
+
+  private _breakTextIntoGraphemes(text: string): number[] {
+    const graphemeStarts: number[] =
+      Intl.Segmenter == null ? this._fallbackGraphemeStartIterable(text) : this._fromDomSegmenter(text);
+    // Add the end index of the fragment to the list if the text is not empty.
+    if (graphemeStarts.length > 0) {
+      graphemeStarts.push(this.visibleEndIndex);
+    }
+    return graphemeStarts;
+  }
+
+  /// This List contains an ascending sequence of UTF16 offsets that points to
+  /// grapheme starts within the line. Each UTF16 offset is relative to the
+  /// start of the paragraph, instead of the start of the line.
+  ///
+  /// For example, `graphemeStarts[n]` gives the UTF16 offset of the `n`-th
+  /// grapheme in the line.
+  private _graphemeStarts?: number[] = null;
+  get graphemeStarts(): number[] {
+    if (this._graphemeStarts === null) {
+      this._graphemeStarts =
+        this.visibleEndIndex === this.startIndex
+          ? []
+          : this._breakTextIntoGraphemes(this.paragraph.plainText.substring(this.startIndex, this.visibleEndIndex));
+    }
+    return this._graphemeStarts;
+  }
+
+  /// Translate a UTF16 code unit in the paragaph (`offset`), to a grapheme
+  /// offset with in the current line.
+  ///
+  /// The `start` and `end` parameters are both grapheme offsets within the
+  /// current line. They are used to limit the search range (so the return value
+  /// that corresponds to the code unit `offset` must be with in [start, end)).
+  graphemeStartIndexBefore(offset: number, start: number, end: number): number {
+    let low = start;
+    let high = end;
+    console.assert(0 <= low);
+    console.assert(low < high);
+
+    const lineGraphemeBreaks: number[] = this.graphemeStarts;
+    console.assert(offset >= lineGraphemeBreaks[start]);
+    console.assert(offset < lineGraphemeBreaks[lineGraphemeBreaks.length - 1], `${offset}, ${lineGraphemeBreaks}`);
+    console.assert(end === lineGraphemeBreaks.length || offset < lineGraphemeBreaks[end]);
+
+    while (low + 2 <= high) {
+      // high >= low + 2, so low + 1 <= mid <= high - 1
+      const mid = Math.floor((low + high) / 2);
+      const diff = lineGraphemeBreaks[mid] - offset;
+
+      if (diff > 0) {
+        high = mid;
+      } else if (diff < 0) {
+        low = mid;
+      } else {
+        return mid;
+      }
     }
 
-    private _isEllipsisFragment(fragment: LayoutFragment): boolean {
-        // 简化实现，实际需要根据具体类型判断
-        return (fragment as any).constructor?.name === 'EllipsisFragment';
+    console.assert(lineGraphemeBreaks[low] <= offset);
+    console.assert(high === lineGraphemeBreaks.length || offset < lineGraphemeBreaks[high]);
+    return low;
+  }
+
+  /// Returns the UTF-16 range of the character that encloses the code unit at
+  /// the given offset.
+  getCharacterRangeAt(codeUnitOffset: number): URange | null {
+    console.assert(codeUnitOffset >= this.startIndex);
+    if (codeUnitOffset >= this.visibleEndIndex || this.graphemeStarts.length === 0) {
+      return null;
     }
 
-    closestFragmentTo(targetFragment: LayoutFragment, searchLeft: boolean): LayoutFragment | null {
-        let closestFragment: { fragment: LayoutFragment; distance: number } | null = null;
-        
-        for (const fragment of this.fragments) {
-            console.assert(!this._isEllipsisFragment(fragment));
-            if (fragment.start >= this.visibleEndIndex) {
-                break;
-            }
-            if (fragment.graphemeStartIndexRange === null) {
-                continue;
-            }
-            
-            const distance = searchLeft 
-                ? targetFragment.left - fragment.right 
-                : fragment.left - targetFragment.right;
-            const minDistance = closestFragment?.distance;
-            
-            if (distance > 0.0 && (minDistance === undefined || minDistance === null || minDistance > distance)) {
-                closestFragment = { fragment: fragment, distance: distance };
-            } else if (distance === 0.0) {
-                return fragment;
-            }
-        }
-        return closestFragment?.fragment ?? null;
-    }
+    const startIndex = this.graphemeStartIndexBefore(codeUnitOffset, 0, this.graphemeStarts.length);
+    console.assert(startIndex < this.graphemeStarts.length - 1);
+    return {
+      start: this.graphemeStarts[startIndex],
+      end: this.graphemeStarts[startIndex + 1]
+    };
+  }
 
-    /// Finds the closest [LayoutFragment] to the given horizontal offset `dx` in
-    /// this line, that is not an [EllipsisFragment] and contains at least one
-    /// grapheme start.
-    closestFragmentAtOffset(dx: number): LayoutFragment | null {
-        if (this.graphemeStarts.length === 0) {
-            return null;
-        }
-        console.assert(this.graphemeStarts.length >= 2);
-        
-        let graphemeIndex = 0;
-        let closestFragment: { fragment: LayoutFragment; distance: number } | null = null;
-        
-        for (const fragment of this.fragments) {
-            console.assert(!this._isEllipsisFragment(fragment));
-            if (fragment.start >= this.visibleEndIndex) {
-                break;
-            }
-            if (fragment.length === 0) {
-                continue;
-            }
-            
-            while (fragment.start > this.graphemeStarts[graphemeIndex]) {
-                graphemeIndex += 1;
-            }
-            
-            const firstGraphemeStartInFragment = this.graphemeStarts[graphemeIndex];
-            if (firstGraphemeStartInFragment >= fragment.end) {
-                continue;
-            }
-            
-            let distance: number;
-            if (dx < fragment.left) {
-                distance = fragment.left - dx;
-            } else if (dx > fragment.right) {
-                distance = dx - fragment.right;
-            } else {
-                return fragment;
-            }
-            console.assert(distance > 0);
+  private _isEllipsisFragment(fragment: LayoutFragment): boolean {
+    return (fragment as any).constructor?.name === 'EllipsisFragment';
+  }
 
-            const minDistance = closestFragment?.distance;
-            if (minDistance === undefined || minDistance === null || minDistance > distance) {
-                closestFragment = { fragment: fragment, distance: distance };
-            }
-        }
-        return closestFragment?.fragment ?? null;
-    }
+  closestFragmentTo(targetFragment: LayoutFragment, searchLeft: boolean): LayoutFragment | null {
+    let closestFragment: { fragment: LayoutFragment; distance: number } | null = null;
 
-    // hashCode equivalent
-    getHashCode(): number {
-        return this._hashObjects([
-            this.lineMetrics,
-            this.startIndex,
-            this.endIndex,
-            this.trailingNewlines,
-            this.trailingSpaces,
-            this.spaceCount,
-            this.widthWithTrailingSpaces,
-            this.fragments,
-            this.textDirection,
-            this.displayText
-        ]);
-    }
+    for (const fragment of this.fragments) {
+      console.assert(!this._isEllipsisFragment(fragment));
+      if (fragment.start >= this.visibleEndIndex) {
+        break;
+      }
+      if (fragment.graphemeStartIndexRange === null) {
+        continue;
+      }
 
-    private _hashObjects(objects: any[]): number {
-        // 简化的哈希实现
-        let hash = 0;
-        for (const obj of objects) {
-            hash = ((hash << 5) - hash) + this._getObjectHash(obj);
-            hash |= 0; // 转换为32位整数
-        }
-        return hash;
-    }
+      const distance = searchLeft
+        ? targetFragment.left - fragment.right
+        : fragment.left - targetFragment.right;
+      const minDistance = closestFragment?.distance;
 
-    private _getObjectHash(obj: any): number {
-        if (obj === null || obj === undefined) return 0;
-        if (typeof obj === 'number') return obj;
-        if (typeof obj === 'string') return this._stringHash(obj);
-        if (typeof obj === 'boolean') return obj ? 1 : 0;
-        if (Array.isArray(obj)) return this._hashObjects(obj);
-        if (typeof obj === 'object' && obj.hashCode) return obj.hashCode();
-        return 0;
+      if (distance > 0.0 && (minDistance === undefined || minDistance === null || minDistance > distance)) {
+        closestFragment = { fragment: fragment, distance: distance };
+      } else if (distance === 0.0) {
+        return fragment;
+      }
     }
+    return closestFragment?.fragment ?? null;
+  }
 
-    private _stringHash(str: string): number {
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-            const char = str.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash |= 0;
-        }
-        return hash;
+  /// Finds the closest [LayoutFragment] to the given horizontal offset `dx` in
+  /// this line, that is not an [EllipsisFragment] and contains at least one
+  /// grapheme start.
+  closestFragmentAtOffset(dx: number): LayoutFragment | null {
+    if (this.graphemeStarts.length === 0) {
+      return null;
     }
+    console.assert(this.graphemeStarts.length >= 2);
 
-    // equals equivalent
-    equals(other: any): boolean {
-        if (this === other) {
-            return true;
-        }
-        if (other === null || typeof other !== 'object' || !(other instanceof ParagraphLine)) {
-            return false;
-        }
-        
-        return this.lineMetrics === other.lineMetrics &&
-            this.startIndex === other.startIndex &&
-            this.endIndex === other.endIndex &&
-            this.trailingNewlines === other.trailingNewlines &&
-            this.trailingSpaces === other.trailingSpaces &&
-            this.spaceCount === other.spaceCount &&
-            this.widthWithTrailingSpaces === other.widthWithTrailingSpaces &&
-            this.fragments === other.fragments &&
-            this.textDirection === other.textDirection &&
-            this.displayText === other.displayText;
-    }
+    let graphemeIndex = 0;
+    let closestFragment: { fragment: LayoutFragment; distance: number } | null = null;
 
-    toString(): string {
-        return `ParagraphLine(${this.startIndex}, ${this.endIndex}, ${JSON.stringify(this.lineMetrics)})`;
+    for (const fragment of this.fragments) {
+      console.assert(!this._isEllipsisFragment(fragment));
+      if (fragment.start >= this.visibleEndIndex) {
+        break;
+      }
+      if (fragment.length === 0) {
+        continue;
+      }
+
+      while (fragment.start > this.graphemeStarts[graphemeIndex]) {
+        graphemeIndex += 1;
+      }
+
+      const firstGraphemeStartInFragment = this.graphemeStarts[graphemeIndex];
+      if (firstGraphemeStartInFragment >= fragment.end) {
+        continue;
+      }
+
+      let distance: number;
+      if (dx < fragment.left) {
+        distance = fragment.left - dx;
+      } else if (dx > fragment.right) {
+        distance = dx - fragment.right;
+      } else {
+        return fragment;
+      }
+      console.assert(distance > 0);
+
+      const minDistance = closestFragment?.distance;
+      if (minDistance === undefined || minDistance === null || minDistance > distance) {
+        closestFragment = { fragment: fragment, distance: distance };
+      }
     }
+    return closestFragment?.fragment ?? null;
+  }
+
+  // hashCode equivalent
+  // getHashCode(): number {
+  //   return this._hashObjects([
+  //     this.lineMetrics,
+  //     this.startIndex,
+  //     this.endIndex,
+  //     this.trailingNewlines,
+  //     this.trailingSpaces,
+  //     this.spaceCount,
+  //     this.widthWithTrailingSpaces,
+  //     this.fragments,
+  //     this.textDirection,
+  //     this.displayText
+  //   ]);
+  // }
+
+  // private _hashObjects(objects: any[]): number {
+  //   // 简化的哈希实现
+  //   let hash = 0;
+  //   for (const obj of objects) {
+  //     hash = ((hash << 5) - hash) + this._getObjectHash(obj);
+  //     hash |= 0; // 转换为32位整数
+  //   }
+  //   return hash;
+  // }
+
+  // private _getObjectHash(obj: any): number {
+  //   if (obj === null || obj === undefined) return 0;
+  //   if (typeof obj === 'number') return obj;
+  //   if (typeof obj === 'string') return this._stringHash(obj);
+  //   if (typeof obj === 'boolean') return obj ? 1 : 0;
+  //   if (Array.isArray(obj)) return this._hashObjects(obj);
+  //   if (typeof obj === 'object' && obj.hashCode) return obj.hashCode();
+  //   return 0;
+  // }
+
+  // private _stringHash(str: string): number {
+  //   let hash = 0;
+  //   for (let i = 0; i < str.length; i++) {
+  //     const char = str.charCodeAt(i);
+  //     hash = ((hash << 5) - hash) + char;
+  //     hash |= 0;
+  //   }
+  //   return hash;
+  // }
+
+  // equals equivalent
+  // equals(other: any): boolean {
+  //   if (this === other) {
+  //     return true;
+  //   }
+  //   if (other === null || typeof other !== 'object' || !(other instanceof ParagraphLine)) {
+  //     return false;
+  //   }
+
+  //   return this.lineMetrics === other.lineMetrics &&
+  //     this.startIndex === other.startIndex &&
+  //     this.endIndex === other.endIndex &&
+  //     this.trailingNewlines === other.trailingNewlines &&
+  //     this.trailingSpaces === other.trailingSpaces &&
+  //     this.spaceCount === other.spaceCount &&
+  //     this.widthWithTrailingSpaces === other.widthWithTrailingSpaces &&
+  //     this.fragments === other.fragments &&
+  //     this.textDirection === other.textDirection &&
+  //     this.displayText === other.displayText;
+  // }
+
+  toString(): string {
+    return `ParagraphLine(${this.startIndex}, ${this.endIndex}, ${JSON.stringify(this.lineMetrics)})`;
+  }
 }
+
 export class TextPaintService {
-  constructor(readonly paragraph: ParagraphJS) {}
+  constructor(readonly paragraph: ParagraphJS) { }
 
   paint(canvas: Canvas, x: number, y: number) {
     // Loop through all the lines, for each line, loop through all fragments and
@@ -990,7 +1016,7 @@ export class TextPaintService {
     // canvas.tearDownPaint
   }
 
-  _prepareCanvasForFragment(canvas: Canvas, fragment: LayoutFragment) {}
+  _prepareCanvasForFragment(canvas: Canvas, fragment: LayoutFragment) { }
 }
 
 export class TextLayoutService {
@@ -1012,7 +1038,7 @@ export class TextLayoutService {
 
   lines: ParagraphLine[] = [];
 
-  constructor(readonly paragraph: ParagraphJS) {}
+  constructor(readonly paragraph: ParagraphJS) { }
 
   getClosestGlyphInfo(dx: number, dy: number): GlyphInfo | null {
     throw new Error("need implemented");
@@ -1034,13 +1060,34 @@ export class ParagraphSpan {
     readonly style: TextStyleJS,
     readonly start: number,
     readonly end: number
-  ) {}
+  ) { }
   // stype: TextStyleJS,
   // start: number,
   // end: number,
 }
 
+/// Holds information for a placeholder in a paragraph.
+///
+/// [width], [height] and [baselineOffset] are expected to be already scaled.
 export class ParagraphPlaceholder extends ParagraphSpan {
+    /// The scaled width of the placeholder.
+  width: number;
+
+  /// The scaled height of the placeholder.
+  height: number;
+
+  /// Specifies how the placeholder rectangle will be vertically aligned with
+  /// the surrounding text.
+  alignment: PlaceholderAlignment;
+
+  /// When the [alignment] value is [ui.PlaceholderAlignment.baseline], the
+  /// [baselineOffset] indicates the distance from the baseline to the top of
+  /// the placeholder rectangle.
+  baselineOffset: number;
+
+  /// Dictates whether to use alphabetic or ideographic baseline.
+  baseline: TextBaseline;
+  
   constructor(style: TextStyleJS, start: number, end: number) {
     super(style, start, end);
   }
@@ -1063,663 +1110,670 @@ export class PlaceholderSpan extends ParagraphPlaceholder /*implements Paragraph
 
 /// Builds instances of [ParagraphLine] for the given [paragraph].
 class LineBuilder {
-    private _fragments: LayoutFragment[];
-    private _fragmentsForNextLine: LayoutFragment[] | null = null;
-    
-    readonly maxWidth: number;
-    readonly paragraph: ParagraphJS;
-    readonly spanometer: Spanometer;
-    readonly lineNumber: number;
-    readonly accumulatedHeight: number;
-    
-    width: number = 0.0;
-    widthIncludingSpace: number = 0.0;
-    ascent: number = 0.0;
-    descent: number = 0.0;
-    
-    private _lastBreakableFragment: number = -1;
-    private _breakCount: number = 0;
-    private _spaceCount: number = 0;
-    private _trailingSpaces: number = 0;
-    
-    private constructor(
-        paragraph: ParagraphJS,
-        spanometer: Spanometer,
-        maxWidth: number,
-        lineNumber: number,
-        accumulatedHeight: number,
-        fragments: LayoutFragment[]
-    ) {
-        this.paragraph = paragraph;
-        this.spanometer = spanometer;
-        this.maxWidth = maxWidth;
-        this.lineNumber = lineNumber;
-        this.accumulatedHeight = accumulatedHeight;
-        this._fragments = fragments;
+  private _fragments: LayoutFragment[];
+  private _fragmentsForNextLine: LayoutFragment[] | null = null;
+
+  readonly maxWidth: number;
+  readonly paragraph: ParagraphJS;
+  readonly spanometer: Spanometer;
+  readonly lineNumber: number;
+  readonly accumulatedHeight: number;
+
+  width: number = 0.0;
+  widthIncludingSpace: number = 0.0;
+  ascent: number = 0.0;
+  descent: number = 0.0;
+
+  private _lastBreakableFragment: number = -1;
+  private _breakCount: number = 0;
+  private _spaceCount: number = 0;
+  private _trailingSpaces: number = 0;
+
+  private constructor(
+    paragraph: ParagraphJS,
+    spanometer: Spanometer,
+    maxWidth: number,
+    lineNumber: number,
+    accumulatedHeight: number,
+    fragments: LayoutFragment[]
+  ) {
+    this.paragraph = paragraph;
+    this.spanometer = spanometer;
+    this.maxWidth = maxWidth;
+    this.lineNumber = lineNumber;
+    this.accumulatedHeight = accumulatedHeight;
+    this._fragments = fragments;
+    this._recalculateMetrics();
+  }
+
+  /// Creates a [LineBuilder] for the first line in a paragraph.
+  static first(
+    paragraph: ParagraphJS,
+    spanometer: Spanometer,
+    maxWidth: number
+  ): LineBuilder {
+    return new LineBuilder(
+      paragraph,
+      spanometer,
+      maxWidth,
+      0,
+      0.0,
+      []
+    );
+  }
+
+  get startIndex(): number {
+    console.assert(this._fragments.length > 0 || (this._fragmentsForNextLine && this._fragmentsForNextLine.length > 0));
+
+    return this.isNotEmpty ? this._fragments[0].start : this._fragmentsForNextLine![0].start;
+  }
+
+  get endIndex(): number {
+    console.assert(this._fragments.length > 0 || (this._fragmentsForNextLine && this._fragmentsForNextLine.length > 0));
+
+    return this.isNotEmpty ? this._fragments[this._fragments.length - 1].end : this._fragmentsForNextLine![0].start;
+  }
+
+  private get _widthExcludingLastFragment(): number {
+    return this._fragments.length > 1
+      ? this.widthIncludingSpace - this._fragments[this._fragments.length - 1].widthIncludingTrailingSpaces
+      : 0;
+  }
+
+  get height(): number {
+    return this.ascent + this.descent;
+  }
+
+  /// Whether this line can be legally broken into more than one line.
+  get isBreakable(): boolean {
+    if (this._fragments.length === 0) {
+      return false;
+    }
+    if (this._fragments[this._fragments.length - 1].isBreak) {
+      // We need one more break other than the last one.
+      return this._breakCount > 1;
+    }
+    return this._breakCount > 0;
+  }
+
+  /// Returns true if the line can't be legally broken any further.
+  get isNotBreakable(): boolean {
+    return !this.isBreakable;
+  }
+
+  get isEmpty(): boolean {
+    return this._fragments.length === 0;
+  }
+
+  get isNotEmpty(): boolean {
+    return this._fragments.length > 0;
+  }
+
+  get isHardBreak(): boolean {
+    return this._fragments.length > 0 && this._fragments[this._fragments.length - 1].isHardBreak;
+  }
+
+  /// The horizontal offset necessary for the line to be correctly aligned.
+  get alignOffset(): number {
+    const emptySpace = this.maxWidth - this.width;
+    const textAlign = this.paragraph.paragraphStyle.effectiveTextAlign;
+    const paragraphDirection = this._paragraphDirection;
+
+    switch (textAlign) {
+      case TextAlignEnums.Center:
+        return emptySpace / 2.0;
+      case TextAlignEnums.Right:
+        return emptySpace;
+      case TextAlignEnums.Start:
+        return paragraphDirection === TextDirectionEnums.RTL ? emptySpace : 0.0;
+      case TextAlignEnums.End:
+        return paragraphDirection ===  TextDirectionEnums.RTL ? 0.0 : emptySpace;
+      default:
+        return 0.0;
+    }
+  }
+
+  get isOverflowing(): boolean {
+    return this.width > this.maxWidth;
+  }
+
+  get canHaveEllipsis(): boolean {
+    if (this.paragraph.paragraphStyle.ellipsis === null) {
+      return false;
+    }
+
+    const maxLines: number | null = this.paragraph.paragraphStyle.maxLines;
+    return (maxLines === null) || (maxLines === this.lineNumber + 1);
+  }
+
+  private get _canAppendEmptyFragments(): boolean {
+    if (this.isHardBreak) {
+      // Can't append more fragments to this line if it has a hard break.
+      return false;
+    }
+
+    if (this._fragmentsForNextLine && this._fragmentsForNextLine.length > 0) {
+      // If we already have fragments prepared for the next line, then we can't
+      // append more fragments to this line.
+      return false;
+    }
+
+    return true;
+  }
+
+  private get _paragraphDirection(): TextDirection {
+    return this.paragraph.paragraphStyle.effectiveTextDirection;
+  }
+
+  addFragment(fragment: LayoutFragment): void {
+    this._updateMetrics(fragment);
+
+    if (fragment.isBreak) {
+      this._lastBreakableFragment = this._fragments.length;
+    }
+
+    this._fragments.push(fragment);
+  }
+
+  /// Updates the [LineBuilder]'s metrics to take into account the new [fragment].
+  private _updateMetrics(fragment: LayoutFragment): void {
+    this._spaceCount += fragment.trailingSpaces;
+
+    if (fragment.isSpaceOnly) {
+      this._trailingSpaces += fragment.trailingSpaces;
+    } else {
+      this._trailingSpaces = fragment.trailingSpaces;
+      this.width = this.widthIncludingSpace + fragment.widthExcludingTrailingSpaces;
+    }
+    this.widthIncludingSpace += fragment.widthIncludingTrailingSpaces;
+
+    if (fragment.isPlaceholder) {
+      this._adjustPlaceholderAscentDescent(fragment);
+    }
+
+    if (fragment.isBreak) {
+      this._breakCount++;
+    }
+
+    this.ascent = Math.max(this.ascent, fragment.ascent);
+    this.descent = Math.max(this.descent, fragment.descent);
+  }
+
+  private _adjustPlaceholderAscentDescent(fragment: LayoutFragment): void {
+    const placeholder: PlaceholderSpan = fragment.span as PlaceholderSpan;
+
+    let ascent: number, descent: number;
+    switch (placeholder.alignment) {
+      case PlaceholderAlignmentEnums.Top:
+        // The placeholder is aligned to the top of text, which means it has the
+        // same `ascent` as the remaining text. We only need to extend the
+        // `descent` enough to fit the placeholder.
+        ascent = this.ascent;
+        descent = placeholder.height - this.ascent;
+        break;
+
+      case PlaceholderAlignmentEnums.Bottom:
+        // The opposite of `top`. The `descent` is the same, but we extend the
+        // `ascent`.
+        ascent = placeholder.height - this.descent;
+        descent = this.descent;
+        break;
+
+      case PlaceholderAlignmentEnums.Middle:
+        const textMidPoint = this.height / 2;
+        const placeholderMidPoint = placeholder.height / 2;
+        const diff = placeholderMidPoint - textMidPoint;
+        ascent = this.ascent + diff;
+        descent = this.descent + diff;
+        break;
+
+      case PlaceholderAlignmentEnums.AboveBaseline:
+        ascent = placeholder.height;
+        descent = 0.0;
+        break;
+
+      case PlaceholderAlignmentEnums.BelowBaseline:
+        ascent = 0.0;
+        descent = placeholder.height;
+        break;
+
+      case PlaceholderAlignmentEnums.Baseline:
+        ascent = placeholder.baselineOffset;
+        descent = placeholder.height - ascent;
+        break;
+    }
+
+    // Update the metrics of the fragment to reflect the calculated ascent and
+    // descent.
+    fragment.setMetrics(
+      this.spanometer,
+      ascent,
+      descent,
+      fragment.widthExcludingTrailingSpaces,
+      fragment.widthIncludingTrailingSpaces
+    );
+  }
+
+  private _recalculateMetrics(): void {
+    this.width = 0;
+    this.widthIncludingSpace = 0;
+    this.ascent = 0;
+    this.descent = 0;
+    this._spaceCount = 0;
+    this._trailingSpaces = 0;
+    this._breakCount = 0;
+    this._lastBreakableFragment = -1;
+
+    for (let i = 0; i < this._fragments.length; i++) {
+      this._updateMetrics(this._fragments[i]);
+      if (this._fragments[i].isBreak) {
+        this._lastBreakableFragment = i;
+      }
+    }
+  }
+
+  forceBreakLastFragment(availableWidth?: number, allowEmptyLine: boolean = false): void {
+    console.assert(this.isNotEmpty);
+
+    availableWidth = availableWidth ?? this.maxWidth;
+    console.assert(this.widthIncludingSpace > availableWidth);
+
+    this._fragmentsForNextLine = this._fragmentsForNextLine ?? [];
+
+    // When the line has fragments other than the last one, we can always allow
+    // the last fragment to be empty (i.e. completely removed from the line).
+    const hasOtherFragments: boolean = this._fragments.length > 1;
+    const allowLastFragmentToBeEmpty: boolean = hasOtherFragments || allowEmptyLine;
+
+    const lastFragment: LayoutFragment = this._fragments[this._fragments.length - 1];
+
+    if (lastFragment.isPlaceholder) {
+      // Placeholder can't be force-broken. Either keep all of it in the line or
+      // move it to the next line.
+      if (allowLastFragmentToBeEmpty) {
+        this._fragmentsForNextLine!.unshift(this._fragments.pop()!);
         this._recalculateMetrics();
+      }
+      return;
     }
-    
-    /// Creates a [LineBuilder] for the first line in a paragraph.
-    static first(
-        paragraph: ParagraphJS,
-        spanometer: Spanometer,
-        maxWidth: number
-    ): LineBuilder {
-        return new LineBuilder(
-            paragraph,
-            spanometer,
-            maxWidth,
-            0,
-            0.0,
-            []
-        );
+
+    this.spanometer.currentSpan = lastFragment.span;
+    const lineWidthWithoutLastFragment: number =
+      this.widthIncludingSpace - lastFragment.widthIncludingTrailingSpaces;
+    const availableWidthForFragment: number = availableWidth - lineWidthWithoutLastFragment;
+    const forceBreakEnd: number = lastFragment.end - lastFragment.trailingNewlines;
+
+    const breakingPoint: number = this.spanometer.forceBreak(
+      lastFragment.start,
+      forceBreakEnd,
+      availableWidthForFragment,
+      allowLastFragmentToBeEmpty
+    );
+
+    if (breakingPoint === forceBreakEnd) {
+      // The entire fragment remained intact. Let's keep everything as is.
+      return;
     }
-    
-    get startIndex(): number {
-        console.assert(this._fragments.length > 0 || (this._fragmentsForNextLine && this._fragmentsForNextLine.length > 0));
-        
-        return this.isNotEmpty ? this._fragments[0].start : this._fragmentsForNextLine![0].start;
+
+    this._fragments.pop();
+    this._recalculateMetrics();
+
+    const split: (LayoutFragment | null)[] = lastFragment.split(breakingPoint);
+
+    const first: LayoutFragment | null = split[0];
+    if (first != null) {
+      this.spanometer.measureFragment(first);
+      this.addFragment(first);
     }
-    
-    get endIndex(): number {
-        console.assert(this._fragments.length > 0 || (this._fragmentsForNextLine && this._fragmentsForNextLine.length > 0));
-        
-        return this.isNotEmpty ? this._fragments[this._fragments.length - 1].end : this._fragmentsForNextLine![0].start;
+
+    const second: LayoutFragment | null = split[1];
+    if (second != null) {
+      this.spanometer.measureFragment(second);
+      this._fragmentsForNextLine!.unshift(second);
     }
-    
-    private get _widthExcludingLastFragment(): number {
-        return this._fragments.length > 1
-            ? this.widthIncludingSpace - this._fragments[this._fragments.length - 1].widthIncludingTrailingSpaces
-            : 0;
+  }
+
+  insertEllipsis(): void {
+    console.assert(this.canHaveEllipsis);
+    console.assert(this.isOverflowing);
+
+    const ellipsisText: string = this.paragraph.paragraphStyle.ellipsis!;
+
+    this._fragmentsForNextLine = [];
+
+    this.spanometer.currentSpan = this._fragments[this._fragments.length - 1].span;
+    let ellipsisWidth: number = this.spanometer.measureText(ellipsisText);
+    let availableWidth: number = Math.max(0, this.maxWidth - ellipsisWidth);
+
+    while (this._widthExcludingLastFragment > availableWidth) {
+      this._fragmentsForNextLine!.unshift(this._fragments.pop()!);
+      this._recalculateMetrics();
+
+      this.spanometer.currentSpan = this._fragments[this._fragments.length - 1].span;
+      ellipsisWidth = this.spanometer.measureText(ellipsisText);
+      availableWidth = this.maxWidth - ellipsisWidth;
     }
-    
-    get height(): number {
-        return this.ascent + this.descent;
+
+    const lastFragment = this._fragments[this._fragments.length - 1];
+    this.forceBreakLastFragment(availableWidth, true);
+
+    const ellipsisFragment = new EllipsisFragment(this.endIndex, lastFragment.span)
+      // start: this.endIndex,
+      // end: this.endIndex,
+      // trailingSpaces: 0,
+      // trailingNewlines: 0,
+      // widthExcludingTrailingSpaces: ellipsisWidth,
+      // widthIncludingTrailingSpaces: ellipsisWidth,
+      // ascent: lastFragment.ascent,
+      // descent: lastFragment.descent,
+      // span: lastFragment.span,
+      // isBreak: false,
+      // isHardBreak: false,
+      // isSpaceOnly: false,
+      // isPlaceholder: false,
+      // split: (breakingPoint: number) => [null, null],
+     ellipsisFragment. setMetrics(
+        this.spanometer, lastFragment.ascent, lastFragment.descent, ellipsisWidth, ellipsisWidth)
+
+      //   ascent: number,
+      //   descent: number,
+      //   widthExcludingTrailingSpaces: number,
+      //   widthIncludingTrailingSpaces: number
+      // ) => {
+      //   // 实现设置度量的逻辑
+      // }
+    // } as LayoutFragment;
+
+    this.addFragment(ellipsisFragment);
+  }
+
+  revertToLastBreakOpportunity(): void {
+    console.assert(this.isBreakable);
+
+    // The last fragment in the line may or may not be breakable. Regardless,
+    // it needs to be removed.
+    //
+    // We need to find the latest breakable fragment in the line (other than the
+    // last fragment). Such breakable fragment is guaranteed to be found because
+    // the line `isBreakable`.
+
+    // Start from the end and skip the last fragment.
+    let i: number = this._fragments.length - 2;
+    while (!this._fragments[i].isBreak) {
+      i--;
     }
-    
-    /// Whether this line can be legally broken into more than one line.
-    get isBreakable(): boolean {
-        if (this._fragments.length === 0) {
-            return false;
-        }
-        if (this._fragments[this._fragments.length - 1].isBreak) {
-            // We need one more break other than the last one.
-            return this._breakCount > 1;
-        }
-        return this._breakCount > 0;
+
+    this._fragmentsForNextLine = this._fragments.slice(i + 1);
+    this._fragments.splice(i + 1);
+    this._recalculateMetrics();
+  }
+
+  /// Appends as many zero-width fragments as this line allows.
+  ///
+  /// Returns the number of fragments that were appended.
+  appendZeroWidthFragments(fragments: LayoutFragment[], startFrom: number): number {
+    let i: number = startFrom;
+    while (this._canAppendEmptyFragments &&
+      i < fragments.length &&
+      fragments[i].widthExcludingTrailingSpaces === 0) {
+      this.addFragment(fragments[i]);
+      i++;
     }
-    
-    /// Returns true if the line can't be legally broken any further.
-    get isNotBreakable(): boolean {
-        return !this.isBreakable;
+    return i - startFrom;
+  }
+
+  /// Builds the [ParagraphLine] instance that represents this line.
+  build(): ParagraphLine {
+    if (this._fragmentsForNextLine === null) {
+      this._fragmentsForNextLine =
+        this._fragments.slice(this._lastBreakableFragment + 1);
+      this._fragments.splice(this._lastBreakableFragment + 1);
     }
-    
-    get isEmpty(): boolean {
-        return this._fragments.length === 0;
+
+    const trailingNewlines: number = this.isEmpty ? 0 : this._fragments[this._fragments.length - 1].trailingNewlines;
+    const line: ParagraphLine = {
+      lineNumber: this.lineNumber,
+      startIndex: this.startIndex,
+      endIndex: this.endIndex,
+      trailingNewlines: trailingNewlines,
+      trailingSpaces: this._trailingSpaces,
+      spaceCount: this._spaceCount,
+      hardBreak: this.isHardBreak,
+      width: this.width,
+      widthWithTrailingSpaces: this.widthIncludingSpace,
+      left: this.alignOffset,
+      height: this.height,
+      baseline: this.accumulatedHeight + this.ascent,
+      ascent: this.ascent,
+      descent: this.descent,
+      fragments: this._fragments,
+      textDirection: this._paragraphDirection,
+      paragraph: this.paragraph
+    };
+
+    for (const fragment of this._fragments) {
+      fragment.line = line;
     }
-    
-    get isNotEmpty(): boolean {
-        return this._fragments.length > 0;
-    }
-    
-    get isHardBreak(): boolean {
-        return this._fragments.length > 0 && this._fragments[this._fragments.length - 1].isHardBreak;
-    }
-    
-    /// The horizontal offset necessary for the line to be correctly aligned.
-    get alignOffset(): number {
-        const emptySpace = this.maxWidth - this.width;
-        const textAlign = this.paragraph.paragraphStyle.effectiveTextAlign;
-        const paragraphDirection = this._paragraphDirection;
-        
-        switch (textAlign) {
-            case TextAlign.center:
-                return emptySpace / 2.0;
-            case TextAlign.right:
-                return emptySpace;
-            case TextAlign.start:
-                return paragraphDirection === TextDirection.rtl ? emptySpace : 0.0;
-            case TextAlign.end:
-                return paragraphDirection === TextDirection.rtl ? 0.0 : emptySpace;
-            default:
-                return 0.0;
-        }
-    }
-    
-    get isOverflowing(): boolean {
-        return this.width > this.maxWidth;
-    }
-    
-    get canHaveEllipsis(): boolean {
-        if (this.paragraph.paragraphStyle.ellipsis === null) {
-            return false;
-        }
-        
-        const maxLines: number | null = this.paragraph.paragraphStyle.maxLines;
-        return (maxLines === null) || (maxLines === this.lineNumber + 1);
-    }
-    
-    private get _canAppendEmptyFragments(): boolean {
-        if (this.isHardBreak) {
-            // Can't append more fragments to this line if it has a hard break.
-            return false;
-        }
-        
-        if (this._fragmentsForNextLine && this._fragmentsForNextLine.length > 0) {
-            // If we already have fragments prepared for the next line, then we can't
-            // append more fragments to this line.
-            return false;
-        }
-        
-        return true;
-    }
-    
-    private get _paragraphDirection(): TextDirection {
-        return this.paragraph.paragraphStyle.effectiveTextDirection;
-    }
-    
-    addFragment(fragment: LayoutFragment): void {
-        this._updateMetrics(fragment);
-        
-        if (fragment.isBreak) {
-            this._lastBreakableFragment = this._fragments.length;
-        }
-        
-        this._fragments.push(fragment);
-    }
-    
-    /// Updates the [LineBuilder]'s metrics to take into account the new [fragment].
-    private _updateMetrics(fragment: LayoutFragment): void {
-        this._spaceCount += fragment.trailingSpaces;
-        
-        if (fragment.isSpaceOnly) {
-            this._trailingSpaces += fragment.trailingSpaces;
-        } else {
-            this._trailingSpaces = fragment.trailingSpaces;
-            this.width = this.widthIncludingSpace + fragment.widthExcludingTrailingSpaces;
-        }
-        this.widthIncludingSpace += fragment.widthIncludingTrailingSpaces;
-        
-        if (fragment.isPlaceholder) {
-            this._adjustPlaceholderAscentDescent(fragment);
-        }
-        
-        if (fragment.isBreak) {
-            this._breakCount++;
-        }
-        
-        this.ascent = Math.max(this.ascent, fragment.ascent);
-        this.descent = Math.max(this.descent, fragment.descent);
-    }
-    
-    private _adjustPlaceholderAscentDescent(fragment: LayoutFragment): void {
-        const placeholder: PlaceholderSpan = fragment.span as PlaceholderSpan;
-        
-        let ascent: number, descent: number;
-        switch (placeholder.alignment) {
-            case PlaceholderAlignment.top:
-                // The placeholder is aligned to the top of text, which means it has the
-                // same `ascent` as the remaining text. We only need to extend the
-                // `descent` enough to fit the placeholder.
-                ascent = this.ascent;
-                descent = placeholder.height - this.ascent;
-                break;
-                
-            case PlaceholderAlignment.bottom:
-                // The opposite of `top`. The `descent` is the same, but we extend the
-                // `ascent`.
-                ascent = placeholder.height - this.descent;
-                descent = this.descent;
-                break;
-                
-            case PlaceholderAlignment.middle:
-                const textMidPoint: number = this.height / 2;
-                const placeholderMidPoint: number = placeholder.height / 2;
-                const diff: number = placeholderMidPoint - textMidPoint;
-                ascent = this.ascent + diff;
-                descent = this.descent + diff;
-                break;
-                
-            case PlaceholderAlignment.aboveBaseline:
-                ascent = placeholder.height;
-                descent = 0.0;
-                break;
-                
-            case PlaceholderAlignment.belowBaseline:
-                ascent = 0.0;
-                descent = placeholder.height;
-                break;
-                
-            case PlaceholderAlignment.baseline:
-                ascent = placeholder.baselineOffset;
-                descent = placeholder.height - ascent;
-                break;
-        }
-        
-        // Update the metrics of the fragment to reflect the calculated ascent and
-        // descent.
-        fragment.setMetrics(
-            this.spanometer,
-            ascent,
-            descent,
-            fragment.widthExcludingTrailingSpaces,
-            fragment.widthIncludingTrailingSpaces
-        );
-    }
-    
-    private _recalculateMetrics(): void {
-        this.width = 0;
-        this.widthIncludingSpace = 0;
-        this.ascent = 0;
-        this.descent = 0;
-        this._spaceCount = 0;
-        this._trailingSpaces = 0;
-        this._breakCount = 0;
-        this._lastBreakableFragment = -1;
-        
-        for (let i = 0; i < this._fragments.length; i++) {
-            this._updateMetrics(this._fragments[i]);
-            if (this._fragments[i].isBreak) {
-                this._lastBreakableFragment = i;
-            }
-        }
-    }
-    
-    forceBreakLastFragment(availableWidth?: number, allowEmptyLine: boolean = false): void {
-        console.assert(this.isNotEmpty);
-        
-        availableWidth = availableWidth ?? this.maxWidth;
-        console.assert(this.widthIncludingSpace > availableWidth);
-        
-        this._fragmentsForNextLine = this._fragmentsForNextLine ?? [];
-        
-        // When the line has fragments other than the last one, we can always allow
-        // the last fragment to be empty (i.e. completely removed from the line).
-        const hasOtherFragments: boolean = this._fragments.length > 1;
-        const allowLastFragmentToBeEmpty: boolean = hasOtherFragments || allowEmptyLine;
-        
-        const lastFragment: LayoutFragment = this._fragments[this._fragments.length - 1];
-        
-        if (lastFragment.isPlaceholder) {
-            // Placeholder can't be force-broken. Either keep all of it in the line or
-            // move it to the next line.
-            if (allowLastFragmentToBeEmpty) {
-                this._fragmentsForNextLine!.unshift(this._fragments.pop()!);
-                this._recalculateMetrics();
-            }
-            return;
-        }
-        
-        this.spanometer.currentSpan = lastFragment.span;
-        const lineWidthWithoutLastFragment: number =
-            this.widthIncludingSpace - lastFragment.widthIncludingTrailingSpaces;
-        const availableWidthForFragment: number = availableWidth - lineWidthWithoutLastFragment;
-        const forceBreakEnd: number = lastFragment.end - lastFragment.trailingNewlines;
-        
-        const breakingPoint: number = this.spanometer.forceBreak(
-            lastFragment.start,
-            forceBreakEnd,
-            availableWidthForFragment,
-            allowLastFragmentToBeEmpty
-        );
-        
-        if (breakingPoint === forceBreakEnd) {
-            // The entire fragment remained intact. Let's keep everything as is.
-            return;
-        }
-        
-        this._fragments.pop();
-        this._recalculateMetrics();
-        
-        const split: (LayoutFragment | null)[] = lastFragment.split(breakingPoint);
-        
-        const first: LayoutFragment | null = split[0];
-        if (first != null) {
-            this.spanometer.measureFragment(first);
-            this.addFragment(first);
-        }
-        
-        const second: LayoutFragment | null = split[1];
-        if (second != null) {
-            this.spanometer.measureFragment(second);
-            this._fragmentsForNextLine!.unshift(second);
-        }
-    }
-    
-    insertEllipsis(): void {
-        console.assert(this.canHaveEllipsis);
-        console.assert(this.isOverflowing);
-        
-        const ellipsisText: string = this.paragraph.paragraphStyle.ellipsis!;
-        
-        this._fragmentsForNextLine = [];
-        
-        this.spanometer.currentSpan = this._fragments[this._fragments.length - 1].span;
-        let ellipsisWidth: number = this.spanometer.measureText(ellipsisText);
-        let availableWidth: number = Math.max(0, this.maxWidth - ellipsisWidth);
-        
-        while (this._widthExcludingLastFragment > availableWidth) {
-            this._fragmentsForNextLine!.unshift(this._fragments.pop()!);
-            this._recalculateMetrics();
-            
-            this.spanometer.currentSpan = this._fragments[this._fragments.length - 1].span;
-            ellipsisWidth = this.spanometer.measureText(ellipsisText);
-            availableWidth = this.maxWidth - ellipsisWidth;
-        }
-        
-        const lastFragment: LayoutFragment = this._fragments[this._fragments.length - 1];
-        this.forceBreakLastFragment(availableWidth, true);
-        
-        // 创建椭圆片段（需要具体实现）
-        const ellipsisFragment: LayoutFragment = {
-            start: this.endIndex,
-            end: this.endIndex,
-            trailingSpaces: 0,
-            trailingNewlines: 0,
-            widthExcludingTrailingSpaces: ellipsisWidth,
-            widthIncludingTrailingSpaces: ellipsisWidth,
-            ascent: lastFragment.ascent,
-            descent: lastFragment.descent,
-            span: lastFragment.span,
-            isBreak: false,
-            isHardBreak: false,
-            isSpaceOnly: false,
-            isPlaceholder: false,
-            split: (breakingPoint: number) => [null, null],
-            setMetrics: (
-                spanometer: Spanometer,
-                ascent: number,
-                descent: number,
-                widthExcludingTrailingSpaces: number,
-                widthIncludingTrailingSpaces: number
-            ) => {
-                // 实现设置度量的逻辑
-            }
-        } as LayoutFragment;
-        
-        this.addFragment(ellipsisFragment);
-    }
-    
-    revertToLastBreakOpportunity(): void {
-        console.assert(this.isBreakable);
-        
-        // The last fragment in the line may or may not be breakable. Regardless,
-        // it needs to be removed.
-        //
-        // We need to find the latest breakable fragment in the line (other than the
-        // last fragment). Such breakable fragment is guaranteed to be found because
-        // the line `isBreakable`.
-        
-        // Start from the end and skip the last fragment.
-        let i: number = this._fragments.length - 2;
-        while (!this._fragments[i].isBreak) {
-            i--;
-        }
-        
-        this._fragmentsForNextLine = this._fragments.slice(i + 1);
-        this._fragments.splice(i + 1);
-        this._recalculateMetrics();
-    }
-    
-    /// Appends as many zero-width fragments as this line allows.
-    ///
-    /// Returns the number of fragments that were appended.
-    appendZeroWidthFragments(fragments: LayoutFragment[], startFrom: number): number {
-        let i: number = startFrom;
-        while (this._canAppendEmptyFragments &&
-            i < fragments.length &&
-            fragments[i].widthExcludingTrailingSpaces === 0) {
-            this.addFragment(fragments[i]);
-            i++;
-        }
-        return i - startFrom;
-    }
-    
-    /// Builds the [ParagraphLine] instance that represents this line.
-    build(): ParagraphLine {
-        if (this._fragmentsForNextLine === null) {
-            this._fragmentsForNextLine =
-                this._fragments.slice(this._lastBreakableFragment + 1);
-            this._fragments.splice(this._lastBreakableFragment + 1);
-        }
-        
-        const trailingNewlines: number = this.isEmpty ? 0 : this._fragments[this._fragments.length - 1].trailingNewlines;
-        const line: ParagraphLine = {
-            lineNumber: this.lineNumber,
-            startIndex: this.startIndex,
-            endIndex: this.endIndex,
-            trailingNewlines: trailingNewlines,
-            trailingSpaces: this._trailingSpaces,
-            spaceCount: this._spaceCount,
-            hardBreak: this.isHardBreak,
-            width: this.width,
-            widthWithTrailingSpaces: this.widthIncludingSpace,
-            left: this.alignOffset,
-            height: this.height,
-            baseline: this.accumulatedHeight + this.ascent,
-            ascent: this.ascent,
-            descent: this.descent,
-            fragments: this._fragments,
-            textDirection: this._paragraphDirection,
-            paragraph: this.paragraph
-        };
-        
-        for (const fragment of this._fragments) {
-            fragment.line = line;
-        }
-        
-        return line;
-    }
-    
-    /// Creates a new [LineBuilder] to build the next line in the paragraph.
-    nextLine(): LineBuilder {
-        return new LineBuilder(
-            this.paragraph,
-            this.spanometer,
-            this.maxWidth,
-            this.lineNumber + 1,
-            this.accumulatedHeight + this.height,
-            this._fragmentsForNextLine ?? []
-        );
-    }
+
+    return line;
+  }
+
+  /// Creates a new [LineBuilder] to build the next line in the paragraph.
+  nextLine(): LineBuilder {
+    return new LineBuilder(
+      this.paragraph,
+      this.spanometer,
+      this.maxWidth,
+      this.lineNumber + 1,
+      this.accumulatedHeight + this.height,
+      this._fragmentsForNextLine ?? []
+    );
+  }
 }
 
 /// Responsible for taking measurements within spans of a paragraph.
+///
+/// Can't perform measurements across spans. To measure across spans, multiple
+/// measurements have to be taken.
+///
+/// Before performing any measurement, the [currentSpan] has to be set. Once
+/// it's set, the [Spanometer] updates the underlying [context] so that
+/// subsequent measurements use the correct styles.
 export class Spanometer {
-    readonly paragraph: ParagraphJS;
-    private static _rulerHost: RulerHost = new RulerHost();
-    private static _rulers: Map<TextHeightStyle, TextHeightRuler> = new Map();
-    
-    private _currentRuler: TextHeightRuler | null = null;
-    private _currentSpan: ParagraphSpan | null = null;
-    private _lastContextFont: string = '';
-    
-    constructor(paragraph: ParagraphJS) {
-        this.paragraph = paragraph;
+  readonly paragraph: ParagraphJS;
+  private static _rulerHost = new RulerHost();
+  private static _rulers: Map<TextHeightStyle, TextHeightRuler> = new Map();
+
+  private _currentRuler?: TextHeightRuler = null;
+  private _currentSpan?: ParagraphSpan = null;
+  private _lastContextFont: string = '';
+
+  constructor(paragraph: ParagraphJS) {
+    this.paragraph = paragraph;
+  }
+
+  /// Clears the cache of rulers that are used for measuring text height and
+  /// baseline metrics.
+  static clearRulersCache(): void {
+    this._rulers.forEach((ruler: TextHeightRuler, style: TextHeightStyle) => {
+      ruler.dispose();
+    });
+    this._rulers.clear();
+  }
+
+  get letterSpacing(): number | null {
+    return this.currentSpan.style.letterSpacing;
+  }
+
+  get currentSpan(): ParagraphSpan {
+    if (this._currentSpan === null) {
+      throw new Error('Current span is not set');
     }
-    
-    /// Clears the cache of rulers that are used for measuring text height and
-    /// baseline metrics.
-    static clearRulersCache(): void {
-        this._rulers.forEach((ruler: TextHeightRuler, style: TextHeightStyle) => {
-            ruler.dispose();
-        });
-        this._rulers.clear();
+    return this._currentSpan;
+  }
+
+  set currentSpan(span: ParagraphSpan | null) {
+    // Update the font string if it's different from the last applied font
+    // string.
+    //
+    // Also, we need to update the font string even if the span isn't changing.
+    // That's because `textContext` is shared across all spanometers.
+    if (span !== null) {
+      const newCssFontString: string = span.style.cssFontString;
+      if (this._lastContextFont !== newCssFontString) {
+        this._lastContextFont = newCssFontString;
+        textContext.font = newCssFontString;
+      }
     }
-    
-    get letterSpacing(): number | null {
-        return this.currentSpan.style.letterSpacing;
+
+    if (span === this._currentSpan) {
+      return;
     }
-    
-    get currentSpan(): ParagraphSpan {
-        if (this._currentSpan === null) {
-            throw new Error('Current span is not set');
-        }
-        return this._currentSpan;
+    this._currentSpan = span;
+
+    if (span === null) {
+      this._currentRuler = null;
+      return;
     }
-    
-    set currentSpan(span: ParagraphSpan | null) {
-        // Update the font string if it's different from the last applied font
-        // string.
-        //
-        // Also, we need to update the font string even if the span isn't changing.
-        // That's because `textContext` is shared across all spanometers.
-        if (span !== null) {
-            const newCssFontString: string = span.style.cssFontString;
-            if (this._lastContextFont !== newCssFontString) {
-                this._lastContextFont = newCssFontString;
-                textContext.font = newCssFontString;
-            }
-        }
-        
-        if (span === this._currentSpan) {
-            return;
-        }
-        this._currentSpan = span;
-        
-        if (span === null) {
-            this._currentRuler = null;
-            return;
-        }
-        
-        // Update the height ruler.
-        // If the ruler doesn't exist in the cache, create a new one and cache it.
-        const heightStyle: TextHeightStyle = span.style.heightStyle;
-        let ruler: TextHeightRuler | undefined = Spanometer._rulers.get(heightStyle);
-        if (ruler === undefined) {
-            ruler = new TextHeightRuler(heightStyle, Spanometer._rulerHost);
-            Spanometer._rulers.set(heightStyle, ruler);
-        }
-        this._currentRuler = ruler;
+
+    // Update the height ruler.
+    // If the ruler doesn't exist in the cache, create a new one and cache it.
+    const heightStyle: TextHeightStyle = span.style.heightStyle;
+    let ruler: TextHeightRuler | undefined = Spanometer._rulers.get(heightStyle);
+    if (ruler === undefined) {
+      ruler = new TextHeightRuler(heightStyle, Spanometer._rulerHost);
+      Spanometer._rulers.set(heightStyle, ruler);
     }
-    
-    /// Whether the spanometer is ready to take measurements.
-    get isReady(): boolean {
-        return this._currentSpan !== null;
+    this._currentRuler = ruler;
+  }
+
+  /// Whether the spanometer is ready to take measurements.
+  get isReady(): boolean {
+    return this._currentSpan !== null;
+  }
+
+  /// The distance from the top of the current span to the alphabetic baseline.
+  get ascent(): number {
+    if (this._currentRuler === null) {
+      throw new Error('Current ruler is not set');
     }
-    
-    /// The distance from the top of the current span to the alphabetic baseline.
-    get ascent(): number {
-        if (this._currentRuler === null) {
-            throw new Error('Current ruler is not set');
-        }
-        return this._currentRuler.alphabeticBaseline;
+    return this._currentRuler.alphabeticBaseline;
+  }
+
+  /// The distance from the bottom of the current span to the alphabetic baseline.
+  get descent(): number {
+    return this.height - this.ascent;
+  }
+
+  /// The line height of the current span.
+  get height(): number {
+    if (this._currentRuler === null) {
+      throw new Error('Current ruler is not set');
     }
-    
-    /// The distance from the bottom of the current span to the alphabetic baseline.
-    get descent(): number {
-        return this.height - this.ascent;
+    return this._currentRuler.height;
+  }
+
+  measureText(text: string): number {
+    return measureSubstring(textContext, text, 0, text.length);
+  }
+
+  measureRange(start: number, end: number): number {
+    console.assert(this._currentSpan !== null);
+
+    // Make sure the range is within the current span.
+    console.assert(start >= this.currentSpan.start && start <= this.currentSpan.end);
+    console.assert(end >= this.currentSpan.start && end <= this.currentSpan.end);
+
+    return this._measure(start, end);
+  }
+
+  measureFragment(fragment: LayoutFragment): void {
+    if (fragment.isPlaceholder) {
+      const placeholder: PlaceholderSpan = fragment.span as PlaceholderSpan;
+      // The ascent/descent values of the placeholder fragment will be finalized
+      // later when the line is built.
+      fragment.setMetrics(
+        this,
+        placeholder.height,
+        0,
+        placeholder.width,
+        placeholder.width
+      );
+    } else {
+      this.currentSpan = fragment.span;
+      const widthExcludingTrailingSpaces: number = this._measure(
+        fragment.start,
+        fragment.end - fragment.trailingSpaces
+      );
+      const widthIncludingTrailingSpaces: number = this._measure(
+        fragment.start,
+        fragment.end - fragment.trailingNewlines
+      );
+      fragment.setMetrics(
+        this,
+        this.ascent,
+        this.descent,
+        widthExcludingTrailingSpaces,
+        widthIncludingTrailingSpaces
+      );
     }
-    
-    /// The line height of the current span.
-    get height(): number {
-        if (this._currentRuler === null) {
-            throw new Error('Current ruler is not set');
-        }
-        return this._currentRuler.height;
+  }
+
+  /// In a continuous, unbreakable block of text from [start] to [end], finds
+  /// the point where text should be broken to fit in the given [availableWidth].
+  ///
+  /// The [start] and [end] indices have to be within the same text span.
+  ///
+  /// When [allowEmpty] is true, the result is guaranteed to be at least one
+  /// character after [start]. But if [allowEmpty] is false and there isn't
+  /// enough [availableWidth] to fit the first character, then [start] is
+  /// returned.
+  ///
+  /// See also:
+  /// - [LineBuilder.forceBreak].
+  forceBreak(start: number, end: number, availableWidth: number, allowEmpty: boolean): number {
+    console.assert(this._currentSpan !== null);
+
+    // Make sure the range is within the current span.
+    console.assert(start >= this.currentSpan.start && start <= this.currentSpan.end);
+    console.assert(end >= this.currentSpan.start && end <= this.currentSpan.end);
+
+    if (availableWidth <= 0.0) {
+      return allowEmpty ? start : start + 1;
     }
-    
-    measureText(text: string): number {
-        return measureSubstring(textContext, text, 0, text.length);
+
+    let low: number = start;
+    let high: number = end;
+    while (high - low > 1) {
+      const mid: number = Math.floor((low + high) / 2);
+      const width: number = this._measure(start, mid);
+      if (width < availableWidth) {
+        low = mid;
+      } else if (width > availableWidth) {
+        high = mid;
+      } else {
+        low = high = mid;
+      }
     }
-    
-    measureRange(start: number, end: number): number {
-        console.assert(this._currentSpan !== null);
-        
-        // Make sure the range is within the current span.
-        console.assert(start >= this.currentSpan.start && start <= this.currentSpan.end);
-        console.assert(end >= this.currentSpan.start && end <= this.currentSpan.end);
-        
-        return this._measure(start, end);
+
+    if (low === start && !allowEmpty) {
+      low++;
     }
-    
-    measureFragment(fragment: LayoutFragment): void {
-        if (fragment.isPlaceholder) {
-            const placeholder: PlaceholderSpan = fragment.span as PlaceholderSpan;
-            // The ascent/descent values of the placeholder fragment will be finalized
-            // later when the line is built.
-            fragment.setMetrics(
-                this,
-                placeholder.height,
-                0,
-                placeholder.width,
-                placeholder.width
-            );
-        } else {
-            this.currentSpan = fragment.span;
-            const widthExcludingTrailingSpaces: number = this._measure(
-                fragment.start,
-                fragment.end - fragment.trailingSpaces
-            );
-            const widthIncludingTrailingSpaces: number = this._measure(
-                fragment.start,
-                fragment.end - fragment.trailingNewlines
-            );
-            fragment.setMetrics(
-                this,
-                this.ascent,
-                this.descent,
-                widthExcludingTrailingSpaces,
-                widthIncludingTrailingSpaces
-            );
-        }
-    }
-    
-    /// In a continuous, unbreakable block of text from [start] to [end], finds
-    /// the point where text should be broken to fit in the given [availableWidth].
-    ///
-    /// The [start] and [end] indices have to be within the same text span.
-    ///
-    /// When [allowEmpty] is true, the result is guaranteed to be at least one
-    /// character after [start]. But if [allowEmpty] is false and there isn't
-    /// enough [availableWidth] to fit the first character, then [start] is
-    /// returned.
-    ///
-    /// See also:
-    /// - [LineBuilder.forceBreak].
-    forceBreak(start: number, end: number, availableWidth: number, allowEmpty: boolean): number {
-        console.assert(this._currentSpan !== null);
-        
-        // Make sure the range is within the current span.
-        console.assert(start >= this.currentSpan.start && start <= this.currentSpan.end);
-        console.assert(end >= this.currentSpan.start && end <= this.currentSpan.end);
-        
-        if (availableWidth <= 0.0) {
-            return allowEmpty ? start : start + 1;
-        }
-        
-        let low: number = start;
-        let high: number = end;
-        while (high - low > 1) {
-            const mid: number = Math.floor((low + high) / 2);
-            const width: number = this._measure(start, mid);
-            if (width < availableWidth) {
-                low = mid;
-            } else if (width > availableWidth) {
-                high = mid;
-            } else {
-                low = high = mid;
-            }
-        }
-        
-        if (low === start && !allowEmpty) {
-            low++;
-        }
-        return low;
-    }
-    
-    private _measure(start: number, end: number): number {
-        console.assert(this._currentSpan !== null);
-        // Make sure the range is within the current span.
-        console.assert(start >= this.currentSpan.start && start <= this.currentSpan.end);
-        console.assert(end >= this.currentSpan.start && end <= this.currentSpan.end);
-        
-        return measureSubstring(
-            textContext,
-            this.paragraph.plainText,
-            start,
-            end,
-            this.letterSpacing,
-        );
-    }
+    return low;
+  }
+
+  private _measure(start: number, end: number): number {
+    console.assert(this._currentSpan !== null);
+    // Make sure the range is within the current span.
+    console.assert(start >= this.currentSpan.start && start <= this.currentSpan.end);
+    console.assert(end >= this.currentSpan.start && end <= this.currentSpan.end);
+
+    return measureSubstring(
+      textContext,
+      this.paragraph.plainText,
+      start,
+      end,
+      this.letterSpacing,
+    );
+  }
 }

@@ -57,17 +57,17 @@ abstract class _CombinedFragment extends TextFragment {
     }
 
     /// Set measurement values for the fragment.
-    setMetrics(spanometer: Spanometer, options: {
-        ascent: number;
-        descent: number;
-        widthExcludingTrailingSpaces: number;
-        widthIncludingTrailingSpaces: number;
-    }): void {
+    setMetrics(spanometer: Spanometer,
+        ascent: number,
+        descent: number,
+        widthExcludingTrailingSpaces: number,
+        widthIncludingTrailingSpaces: number,
+    ): void {
         this._spanometer = spanometer;
-        this._ascent = options.ascent;
-        this._descent = options.descent;
-        this._widthExcludingTrailingSpaces = options.widthExcludingTrailingSpaces;
-        this._widthIncludingTrailingSpaces = options.widthIncludingTrailingSpaces;
+        this._ascent = ascent;
+        this._descent = descent;
+        this._widthExcludingTrailingSpaces = widthExcludingTrailingSpaces;
+        this._widthIncludingTrailingSpaces = widthIncludingTrailingSpaces;
     }
     
     // end mixin _FragmentMetrics
@@ -389,9 +389,9 @@ abstract class _CombinedFragment extends TextFragment {
     // list of UTF16 offsets of graphemes that start in this fragment.
     //
     // Returns null if this fragment contains no grapheme starts.
-    private readonly graphemeStartIndexRange: [number, number] | null = this._getBreaksRange();
+    readonly graphemeStartIndexRange: [number, number] | null = this._getBreaksRange();
 
-    private _getBreaksRange(): [number, number] | null {
+    _getBreaksRange(): [number, number] | null {
         if (this.end === this.start) {
             return null;
         }
