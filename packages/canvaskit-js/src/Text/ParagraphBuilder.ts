@@ -1043,7 +1043,7 @@ export class ParagraphLine {
 
   // This will be called at most once to lazily populate _graphemeStarts.
   private _fromDomSegmenter(fragmentText: string): number[] {
-    const domSegmenter: Segmenter = createIntlSegmenter({ granularity: 'grapheme' });
+    const domSegmenter = createIntlSegmenter({ granularity: 'grapheme' });
     const graphemeStarts: number[] = [];
     const segments = domSegmenter.segment(fragmentText).iterator();
     while (segments.moveNext()) {
@@ -2016,7 +2016,7 @@ class LineBuilder {
   /// The horizontal offset necessary for the line to be correctly aligned.
   get alignOffset(): number {
     const emptySpace = this.maxWidth - this.width;
-    const textAlign = this.paragraph.paragraphStyle.effectiveTextAlign;
+    const textAlign = this.paragraph.paragraphStyle.textAlign // effectiveTextAlign;
     const paragraphDirection = this._paragraphDirection;
 
     switch (textAlign) {
@@ -2062,7 +2062,7 @@ class LineBuilder {
   }
 
   private get _paragraphDirection(): TextDirection {
-    return this.paragraph.paragraphStyle.effectiveTextDirection;
+    return this.paragraph.paragraphStyle.textDirection // effectiveTextDirection;
   }
 
   addFragment(fragment: LayoutFragment): void {

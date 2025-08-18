@@ -105,38 +105,53 @@ abstract class _CombinedFragment extends TextFragment {
     ///                            *-----------endOffset-------------*
     ///          *----------right---------------*
     ///  
+
+    /// The distance from the beginning of the line to the beginning of the fragment.
     get startOffset(): number {
         return this._startOffset;
     }
     private _startOffset!: number;
 
+    /// The width of the line that contains this fragment.
     line: ParagraphLine;
 
+    /// The distance from the beginning of the line to the end of the fragment.
     get endOffset(): number {
         return this.startOffset + this.widthIncludingTrailingSpaces;
     }
 
+    /// The distance from the left edge of the line to the left edge of the fragment.
     get left(): number {
         return this.line.textDirection === TextDirectionEnums.LTR
             ? this.startOffset
             : this.line.width - this.endOffset;
     }
 
+    /// The distance from the left edge of the line to the right edge of the fragment.
     get right(): number {
         return this.line.textDirection === TextDirectionEnums.LTR
             ? this.endOffset
             : this.line.width - this.startOffset;
     }
 
+    /// Set the horizontal position of this fragment relative to the [line] that
+    /// contains it.
     setPosition(startOffset: number, textDirection: TextDirection): void {
         this._startOffset = startOffset;
         this._textDirection ??= textDirection;
     }
 
+    /// Adjust the width of this fragment for paragraph justification.
     justifyTo(paragraphWidth: number): void {
-        if (this.end > this.line.endIndex - this.line.trailingSpaces) return;
-        if (this.trailingSpaces === 0) return;
-
+        // Only justify this fragment if it's not a trailing space in the line.
+        if (this.end > this.line.endIndex - this.line.trailingSpaces) {
+            // Don't justify fragments that are part of trailing spaces of the line.
+            return;
+        }
+        if (this.trailingSpaces === 0) {
+            // If this fragment has no spaces, there's nothing to justify.
+            return;
+        }
         const justificationTotal = paragraphWidth - this.line.width;
         const justificationPerSpace = justificationTotal / this.line.nonTrailingSpaces;
         this._extraWidthForJustification = justificationPerSpace * this.trailingSpaces;
@@ -181,6 +196,7 @@ abstract class _CombinedFragment extends TextFragment {
     /// excluded from the resulting text box.
     toPaintingTextBox(): RectWithDirection /*TextBox*/ {
         if (this._isPartOfTrailingSpacesInLine) {
+            // For painting, we exclude the width of trailing spaces from the box.
             return this.textDirection === TextDirectionEnums.LTR
                 ? {
                     rect: Float32Array.of(
@@ -304,14 +320,14 @@ abstract class _CombinedFragment extends TextFragment {
         const length = endIndex - startIndex;
 
         if (length === 0) {
-            return { pos: startIndex } //new TextPosition(startIndex);
+            return { pos: startIndex, affinity: AffinityEnums.Downstream } //new TextPosition(startIndex);
         }
         if (length === 1) {
             // Find out if `x` is closer to `startIndex` or `endIndex`.
             const distanceFromStart = x;
             const distanceFromEnd = this.widthIncludingTrailingSpaces - x;
             return distanceFromStart < distanceFromEnd
-                ? { pos: startIndex } // new TextPosition(startIndex)
+                ? { pos: startIndex,  affinity: AffinityEnums.Downstream  } // new TextPosition(startIndex)
                 : { pos: startIndex, affinity: AffinityEnums.Upstream } // new TextPosition(endIndex, TextAffinity.upstream);
         }
 
@@ -337,7 +353,7 @@ abstract class _CombinedFragment extends TextFragment {
         // See if `x` is closer to `cutoff` or `cutoff + 1`.
         if (x - lowWidth < highWidth - x) {
             // The offset is closer to cutoff.
-            return { pos: cutoff } //ui.TextPosition(offset: cutoff);
+            return { pos: cutoff, affinity: AffinityEnums.Downstream } //ui.TextPosition(offset: cutoff);
         } else {
             // The offset is closer to cutoff + 1.
             return { pos: cutoff + 1, affinity: AffinityEnums.Upstream } //ui.TextPosition(offset: cutoff + 1, affinity: ui.TextAffinity.upstream);
@@ -426,39 +442,57 @@ abstract class _CombinedFragment extends TextFragment {
     /// that's visually closeset to the given horizontal offset `x` (in the paragraph's coordinates).
     private _getClosestCharacterInRange(x: number, startIndex: number, endIndex: number): GlyphInfo {
         const graphemeStartIndices = this.line.graphemeStarts;
-        const fullRange = new TextRange(graphemeStartIndices[startIndex], graphemeStartIndices[endIndex]);
-        const fullBox = this.toTextBox({ start: fullRange.start, end: fullRange.end });
+        const fullRange = {
+            start: graphemeStartIndices[startIndex],
+            end: graphemeStartIndices[endIndex]
+        }       
+        // new TextRange(graphemeStartIndices[startIndex], graphemeStartIndices[endIndex]);
+        const fullBox = this.toTextBox(fullRange.start, fullRange.end);
 
         if (startIndex + 1 === endIndex) {
-            return new GlyphInfo(fullBox.toRect(), fullRange, fullBox.direction);
+            // return new GlyphInfo(fullBox.toRect(), fullRange, fullBox.direction);
+            return {
+                graphemeLayoutBounds: fullBox.rect,
+                graphemeClusterTextRange: fullRange,
+                dir:  fullBox.dir,
+                isEllipsis: false,
+            }
         }
         console.assert(startIndex + 1 < endIndex);
 
-        const { left, right } = fullBox;
+        const _left = fullBox.rect[0]
+        const _right = fullBox.rect[2]
 
-        if (left < x && x < right) {
+        if (_left < x && x < _right) {
             const midIndex = Math.floor((startIndex + endIndex) / 2);
             const firstHalf = this._getClosestCharacterInRange(x, startIndex, midIndex);
-            if (firstHalf.graphemeClusterLayoutBounds.left < x && x < firstHalf.graphemeClusterLayoutBounds.right) {
+            const left1  =  firstHalf.graphemeLayoutBounds[0]
+            const right1 =  firstHalf.graphemeLayoutBounds[2]
+
+
+            if (left1 < x && x < right1) {
                 return firstHalf;
             }
             const secondHalf = this._getClosestCharacterInRange(x, midIndex, endIndex);
-            if (secondHalf.graphemeClusterLayoutBounds.left < x && x < secondHalf.graphemeClusterLayoutBounds.right) {
+            const left2  =  secondHalf.graphemeLayoutBounds[0]
+            const right2 =  secondHalf.graphemeLayoutBounds[2]
+            if (left2 < x && x < right2) {
                 return secondHalf;
             }
-            const distanceToFirst = Math.abs(x - Math.max(Math.min(x, firstHalf.graphemeClusterLayoutBounds.right), firstHalf.graphemeClusterLayoutBounds.left));
-            const distanceToSecond = Math.abs(x - Math.max(Math.min(x, secondHalf.graphemeClusterLayoutBounds.right), secondHalf.graphemeClusterLayoutBounds.left));
+            const distanceToFirst = Math.abs(x - Math.max(Math.min(x, right1), left1));
+            const distanceToSecond = Math.abs(x - Math.max(Math.min(x, right2), left2));
             return distanceToFirst > distanceToSecond ? firstHalf : secondHalf;
         }
 
-        const range = (fullBox.direction === TextDirection.LTR && x <= left) ||
-            (fullBox.direction === TextDirection.LTR && x > left)
-            ? new TextRange(graphemeStartIndices[startIndex], graphemeStartIndices[startIndex + 1])
-            : new TextRange(graphemeStartIndices[endIndex - 1], graphemeStartIndices[endIndex]);
+        const range = (fullBox.dir === TextDirectionEnums.LTR && x <= _left) ||
+            (fullBox.dir === TextDirectionEnums.LTR && x > _left)
+            ? { start: graphemeStartIndices[startIndex], end: graphemeStartIndices[startIndex + 1] }
+            : { start: graphemeStartIndices[endIndex - 1], end: graphemeStartIndices[endIndex] };
 
-        console.assert(!range.isCollapsed);
-        const box = this.toTextBox({ start: range.start, end: range.end });
-        return new GlyphInfo(box.toRect(), range, box.direction);
+        console.assert(!(range.start == range.end));
+
+        const box = this.toTextBox(range.start, range.end);
+        return { graphemeLayoutBounds: box.rect, graphemeClusterTextRange: range, dir: box.dir, isEllipsis: false};
     }
 
     /// Returns the GlyphInfo of the character in the fragment that is closest to
@@ -548,7 +582,7 @@ export class LayoutFragment extends _CombinedFragment {
     /// given [index].
     // TODO(mdebbar): If we ever get multiple return values in Dart, we should use it!
     //                See: https://github.com/dart-lang/language/issues/68
-    split(index: number):  LayoutFragment[] {
+    split(index: number): LayoutFragment[] {
         console.assert(this.start <= index, 'index must be >= start');
         console.assert(index <= this.end, 'index must be <= end');
 
@@ -716,7 +750,7 @@ export class EllipsisFragment extends LayoutFragment {
         return paragraph.paragraphStyle.ellipsis;
     }
 
-    split(index: number): LayoutFragment[] {
+    split(_index: number): LayoutFragment[] {
         throw new Error('Cannot split an EllipsisFragment');
     }
 }
