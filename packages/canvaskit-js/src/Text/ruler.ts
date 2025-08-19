@@ -1,4 +1,4 @@
-import { TextFontVariations, TextFontFeatures} from "canvaskit-wasm";
+import { TextFontVariations, TextFontFeatures } from "canvaskit-wasm";
 import { RulerHost } from "./measurement";
 import { canonicalizeFontFamily } from "./util";
 
@@ -33,8 +33,8 @@ export class TextHeightStyle {
         readonly fontFamily: string,
         readonly fontSize: number,
         readonly height?: number,
-       readonly  fontFeatures?: TextFontFeatures[],
-       readonly fontVariations?: TextFontVariations[],
+        readonly fontFeatures?: TextFontFeatures[],
+        readonly fontVariations?: TextFontVariations[],
     ) {
         this.fontFamily = fontFamily;
         this.fontSize = fontSize;
@@ -87,7 +87,7 @@ export class TextHeightStyle {
     //     hash = ((hash << 5) - hash) + this.fontFamily.hashCode || 0; // String.hashCode 需要模拟
     //     hash = ((hash << 5) - hash) + this.fontSize;
     //     hash = ((hash << 5) - hash) + (this.height?.toString().hashCode || 0); // Number.hashCode 需要模拟或转换
-        
+
     //     // 处理数组哈希 (简化)
     //     if (this.fontFeatures) {
     //          // Object.hashAll 等效? 需要自定义实现或使用库
@@ -106,10 +106,10 @@ export class TextHeightStyle {
     //          }
     //          hash = ((hash << 5) - hash) + variationsHash;
     //     }
-        
+
     //     return hash | 0; // 转换为 32 位整数
     // }
-    
+
     // 为了完整性，添加一个简单的 String.hashCode 模拟 (JS 没有内置)
     // 可以添加到 String 的原型上 (注意: 修改原生原型有风险)
     /*
@@ -161,7 +161,7 @@ class TextDimensions {
         const style = this._element.style;
 
         style.fontSize = `${Math.floor(fontSize)}px`;
-        
+
         const canonFontFamily = canonicalizeFontFamily(fontFamily);
         if (canonFontFamily) {
             style.fontFamily = canonFontFamily;
@@ -216,52 +216,35 @@ class TextDimensions {
 /// 1. [alphabeticBaseline].
 /// 2. [height].
 export class TextHeightRuler {
-    textHeightStyle: TextHeightStyle;
-    rulerHost: RulerHost;
+    // textHeightStyle: TextHeightStyle;
+    // rulerHost: RulerHost;
 
-    // Elements used to measure the line-height metric.    
-    private _probe: HTMLElement;
-    private _host: HTMLElement;
-    private _dimensions: TextDimensions;
+    // Elements used to measure the line-height metric.   
+    private __probe: HTMLElement;
+    get _probe(): HTMLElement {
+        return this.__probe ??= this._createProbe();
+    }
+    private __host: HTMLElement;
+    get _host(): HTMLElement {
+        return this.__host ??= this._createHost();
+    }
 
+    private __dimensions: TextDimensions;
+    get _dimensions(): TextDimensions {
+        return this.__dimensions ??= new TextDimensions(document.createElement('flt-paragraph') as HTMLDivElement);
+    }
     /// The alphabetic baseline for this ruler's [textHeightStyle].
     private _alphabeticBaseline: number;
+    get alphabeticBaseline(): number {
+        return this._alphabeticBaseline ??= this._probe.getBoundingClientRect().bottom;
+    }
     private _height: number;
+    get height(): number {
+        return this._height ??= this._dimensions.height;
+    }
     private _isDisposed: boolean = false;
 
-    constructor(textHeightStyle: TextHeightStyle, rulerHost: RulerHost) {
-        this.textHeightStyle = textHeightStyle;
-        this.rulerHost = rulerHost;
-
-        this._host = this._createHost();
-        this._probe = this._createProbe();
-        this._dimensions = new TextDimensions(document.createElement('flt-paragraph') as HTMLDivElement);
-        
-        // // 注意：在 Dart 中，这些是 `late final`，意味着它们在第一次访问时计算。
-        // // 在 TS 中，我们可以在构造函数末尾或通过 getter 实现惰性初始化。
-        // // 这里选择在构造函数中初始化，假设依赖项 (_probe, _dimensions) 已正确设置。
-        // // 如果需要严格的惰性加载，应使用 getter。
-        // this._dimensions.applyHeightStyle(this.textHeightStyle);
-        // this._dimensions._element.style.whiteSpace = 'pre'; // Force single-line, preserve whitespaces
-        // this._dimensions.updateTextToSpace();
-        // this._dimensions.appendToHost(this._host);
-        
-        this._alphabeticBaseline = this._probe.getBoundingClientRect().bottom;
-        this._height = this._dimensions.height;
-    }
-
-    get alphabeticBaseline(): number {
-        // if (this._alphabeticBaseline === null) {
-        //     throw new Error("Alphabetic baseline not initialized");
-        // }
-        return this._alphabeticBaseline;
-    }
-
-    get height(): number {
-        // if (this._height === null) {
-        //     throw new Error("Height not initialized");
-        // }
-        return this._height;
+    constructor(readonly textHeightStyle: TextHeightStyle, readonly rulerHost: RulerHost) {
     }
 
     // / Disposes of this ruler and detaches it from the DOM tree.
@@ -274,7 +257,7 @@ export class TextHeightRuler {
     }
 
     private _createHost(): HTMLElement {
-        const host = document.createElement("div") as  HTMLDivElement;
+        const host = document.createElement("div") as HTMLDivElement;
         const style = host.style;
 
         style.visibility = 'hidden';
@@ -288,12 +271,12 @@ export class TextHeightRuler {
         style.border = '0';
         style.padding = '0';
 
-        console.assert(((host)=>{
+        console.assert(((host) => {
             host.setAttribute('data-ruler', 'line-height');
             return true
         })(host));
 
-         this._dimensions.applyHeightStyle(this.textHeightStyle);
+        this._dimensions.applyHeightStyle(this.textHeightStyle);
 
         // Force single-line (even if wider than screen) and preserve whitespaces.
         this._dimensions._element.style.whiteSpace = 'pre';

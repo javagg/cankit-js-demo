@@ -43,6 +43,7 @@ import { LineMetricsJS } from "./paragraph";
 import { LineBreakType } from "./line_breaker";
 import { FragmentFlow } from "./text_direction";
 import { TextHeightRuler, TextHeightStyle } from "./ruler";
+import { StyleManager } from "./style_manager";
 
 // export const ParagraphBuilder: CKParagraphBuilder = {
 //     addPlaceholder: function (width?: number, height?: number, alignment?: PlaceholderAlignment, baseline?: TextBaseline, offset?: number): void {
@@ -217,40 +218,37 @@ export abstract class StyleNode {
     return new ChildStyleNode(this, style);
   }
 
-  _cachedStyle?: TextStyle;
+  _cachedStyle?: TextStyleJS;
 
   /// Generates the final text style to be applied to the text span.
   ///
   /// The resolved text style is equivalent to the entire ascendent chain of
   /// parent style nodes.
-  resolveStyle(): TextStyle {
-    return this._cachedStyle ??= {
-      // background: this._background,
+  resolveStyle(): TextStyleJS {
+    return this._cachedStyle ??= new TextStyleJS({
       backgroundColor: this._backgroundColor,
-      // foreground: this._foreground,
       color: this._color,
       decoration: this._decoration,
       decorationColor: this._decorationColor,
-      decorationStyle: this._decorationStyle,
       decorationThickness: this._decorationThickness,
-      // fontWeight: this._fontWeight,
-      fontStyle: this._fontStyle,
-      fontFamily: this._fontFamily,
-      // fontFamilyFallback: this._fontFamilyFallback,
+      decorationStyle: this._decorationStyle,
+      fontFamilies: [this._fontFamily],
       fontFeatures: this._fontFeatures,
       fontVariations: this._fontVariations,
       fontSize: this._fontSize,
-      foregroundColor: this._foregroundColor,
-      letterSpacing: this._letterSpacing,
-      wordSpacing: this._wordSpacing,
-      // height: this._height,
+      fontStyle: this._fontStyle,
+      backgroundColor: this._backgroundColor,
+
       heightMultiplier: this._heightMultiplier,
-      // leadingDistribution: this._leadingDistribution,
+
       halfLeading: this._halfLeading,
+
+      letterSpacing: this._letterSpacing,
       locale: this._locale,
       shadows: this._shadows,
       textBaseline: this._textBaseline,
-    } as TextStyle;
+      wordSpacing: this._wordSpacing,
+    } as TextStyle);
   }
 
   abstract get _backgroundColor(): InputColor | null
@@ -451,7 +449,7 @@ export class RootStyleNode extends StyleNode {
   }
 
   get _fontFamily(): string | null {
-    return this.paragraphStyle.fontFamily; //?? StyleManager.defaultFontFamily;
+    return this.paragraphStyle.fontFamily ?? StyleManager.defaultFontFamily;
   }
 
   // get _fontFamilyFallback(): string[] | null {
@@ -467,7 +465,7 @@ export class RootStyleNode extends StyleNode {
   }
 
   get _fontSize(): number | null {
-    return this.paragraphStyle.fontSize; //?? StyleManager.defaultFontSize;
+    return this.paragraphStyle.fontSize ?? StyleManager.defaultFontSize;
   }
 
   get _letterSpacing(): number | null {
@@ -1044,19 +1042,18 @@ export class ParagraphLine {
 
   // This will be called at most once to lazily populate _graphemeStarts.
   private _fromDomSegmenter(fragmentText: string): number[] {
-    const domSegmenter = createIntlSegmenter({ granularity: 'grapheme' });
-    const graphemeStarts: number[] = [];
-    const segments = domSegmenter.segment(fragmentText).iterator();
-    while (segments.moveNext()) {
-      graphemeStarts.push(segments.current.index + this.startIndex);
+    const domSegmenter = new Intl.Segmenter([], { granularity: 'grapheme' }) //createIntlSegmenter({ granularity: 'grapheme' });
+    const graphemeStarts = [];
+    const segments = domSegmenter.segment(fragmentText)[Symbol.iterator]();
+    for (let result = segments.next(); !result.done; result = segments.next()) {
+      graphemeStarts.push(result.value.index + this.startIndex);
     }
     console.assert(graphemeStarts.length === 0 || graphemeStarts[0] === this.startIndex);
     return graphemeStarts;
   }
 
   private _breakTextIntoGraphemes(text: string): number[] {
-    const graphemeStarts: number[] =
-      Intl.Segmenter == null ? this._fallbackGraphemeStartIterable(text) : this._fromDomSegmenter(text);
+    const graphemeStarts = Intl.Segmenter == null ? this._fallbackGraphemeStartIterable(text) : this._fromDomSegmenter(text);
     // Add the end index of the fragment to the list if the text is not empty.
     if (graphemeStarts.length > 0) {
       graphemeStarts.push(this.visibleEndIndex);
@@ -1072,13 +1069,9 @@ export class ParagraphLine {
   /// grapheme in the line.
   private _graphemeStarts?: number[] = null;
   get graphemeStarts(): number[] {
-    if (this._graphemeStarts === null) {
-      this._graphemeStarts =
-        this.visibleEndIndex === this.startIndex
-          ? []
-          : this._breakTextIntoGraphemes(this.paragraph.plainText.substring(this.startIndex, this.visibleEndIndex));
-    }
-    return this._graphemeStarts;
+    return this._graphemeStarts ??= this.visibleEndIndex === this.startIndex
+      ? []
+      : this._breakTextIntoGraphemes(this.paragraph.plainText.substring(this.startIndex, this.visibleEndIndex));
   }
 
   /// Translate a UTF16 code unit in the paragaph (`offset`), to a grapheme
@@ -1292,7 +1285,6 @@ export class TextPaintService {
     // individually.
     const paint = new PaintJS();
     const font = new FontJS();
-    canvas.drawText("Hello Roboto", x, y, paint, font);
     for (const line of this.paragraph.lines) {
       for (const fragment of line.fragments) {
         this._paintBackground(canvas, x, y, fragment);
@@ -1355,10 +1347,9 @@ export class TextPaintService {
     const _x = x + line.left + fragmentX;
     const _y = y + line.baseline;
     const text = fragment.getText(this.paragraph);
-    console.log(_x, _y)
-    const paint = new CanvasKit.Paint();
-    paint.setColor(CanvasKit.CYAN);
-    const font = new CanvasKit.Font();
+    const paint = new PaintJS();
+    // paint.setColor(CanvasKit.CYAN);
+    const font = new FontJS();
     canvas.drawText(text, _x, _y, paint, font)
     // canvas.tearDownPaint
   }
@@ -1858,13 +1849,10 @@ export class TextLayoutService {
 
 export class ParagraphSpan {
   constructor(
-    readonly style: TextStyle,
+    readonly style: TextStyleJS,
     readonly start: number,
     readonly end: number
   ) { }
-  // stype: TextStyleJS,
-  // start: number,
-  // end: number,
 }
 
 /// Holds information for a placeholder in a paragraph.
@@ -2440,7 +2428,7 @@ export class Spanometer {
 
     // Update the height ruler.
     // If the ruler doesn't exist in the cache, create a new one and cache it.
-    const heightStyle: TextHeightStyle = span.style.heightStyle;
+    const heightStyle = span.style.heightStyle;
     let ruler = Spanometer._rulers.get(heightStyle);
     if (ruler === undefined) {
       ruler = new TextHeightRuler(heightStyle, Spanometer._rulerHost);

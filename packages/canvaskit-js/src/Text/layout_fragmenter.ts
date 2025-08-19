@@ -1,9 +1,9 @@
 import { GlyphInfo, RectWithDirection, TextDirection, PositionWithAffinity, TextStyle } from "canvaskit-wasm";
 import { TextDirection as TextDirectionEnums, Affinity as AffinityEnums } from "../Core";
 import { TextFragment, TextFragmenter } from "./fragmenter";
-import { LineBreakFragmenter, LineBreakType } from "./line_breaker";
+import { LineBreakFragment, LineBreakFragmenter, LineBreakType } from "./line_breaker";
 import { ParagraphJS, ParagraphSpan, PlaceholderSpan, Spanometer, ParagraphLine } from "./ParagraphBuilder"
-import { BidiFragmenter, FragmentFlow } from "./text_direction";
+import { BidiFragment, BidiFragmenter, FragmentFlow } from "./text_direction";
 
 abstract class _CombinedFragment extends TextFragment {
 
@@ -171,15 +171,18 @@ abstract class _CombinedFragment extends TextFragment {
         return this.line.baseline + this.descent;
     }
 
-    private readonly _textBoxIncludingTrailingSpaces: RectWithDirection /*TextBox*/ = {
-        rect: Float32Array.of(
-            this.line.left + this.left,
-            this.top,
-            this.line.left + this.right,
-            this.bottom
-        ),
-        dir: this.textDirection!
-    };
+    private __textBoxIncludingTrailingSpaces?: RectWithDirection
+    get _textBoxIncludingTrailingSpaces(): RectWithDirection {
+        return this.__textBoxIncludingTrailingSpaces ??= {
+            rect: Float32Array.of(
+                this.line.left + this.left,
+                this.top,
+                this.line.left + this.right,
+                this.bottom
+            ),
+            dir: this.textDirection!
+        }
+    }
 
     /// Whether or not the trailing spaces of this fragment are part of trailing
     /// spaces of the line containing the fragment.
@@ -327,7 +330,7 @@ abstract class _CombinedFragment extends TextFragment {
             const distanceFromStart = x;
             const distanceFromEnd = this.widthIncludingTrailingSpaces - x;
             return distanceFromStart < distanceFromEnd
-                ? { pos: startIndex,  affinity: AffinityEnums.Downstream  } // new TextPosition(startIndex)
+                ? { pos: startIndex, affinity: AffinityEnums.Downstream } // new TextPosition(startIndex)
                 : { pos: startIndex, affinity: AffinityEnums.Upstream } // new TextPosition(endIndex, TextAffinity.upstream);
         }
 
@@ -399,7 +402,16 @@ abstract class _CombinedFragment extends TextFragment {
     // list of UTF16 offsets of graphemes that start in this fragment.
     //
     // Returns null if this fragment contains no grapheme starts.
-    readonly graphemeStartIndexRange: [number, number] | null = this._getBreaksRange();
+    private _graphemeStartIndexRange:[number, number] | null
+    
+    get graphemeStartIndexRange(): [number, number] | null {
+        if (this._graphemeStartIndexRange === undefined) {
+            this._graphemeStartIndexRange = this._getBreaksRange();
+        }
+        return this._graphemeStartIndexRange
+    }
+
+    // readonly graphemeStartIndexRange: [number, number] | null = this._getBreaksRange();
 
     _getBreaksRange(): [number, number] | null {
         if (this.end === this.start) {
@@ -445,7 +457,7 @@ abstract class _CombinedFragment extends TextFragment {
         const fullRange = {
             start: graphemeStartIndices[startIndex],
             end: graphemeStartIndices[endIndex]
-        }       
+        }
         // new TextRange(graphemeStartIndices[startIndex], graphemeStartIndices[endIndex]);
         const fullBox = this.toTextBox(fullRange.start, fullRange.end);
 
@@ -454,7 +466,7 @@ abstract class _CombinedFragment extends TextFragment {
             return {
                 graphemeLayoutBounds: fullBox.rect,
                 graphemeClusterTextRange: fullRange,
-                dir:  fullBox.dir,
+                dir: fullBox.dir,
                 isEllipsis: false,
             }
         }
@@ -466,16 +478,16 @@ abstract class _CombinedFragment extends TextFragment {
         if (_left < x && x < _right) {
             const midIndex = Math.floor((startIndex + endIndex) / 2);
             const firstHalf = this._getClosestCharacterInRange(x, startIndex, midIndex);
-            const left1  =  firstHalf.graphemeLayoutBounds[0]
-            const right1 =  firstHalf.graphemeLayoutBounds[2]
+            const left1 = firstHalf.graphemeLayoutBounds[0]
+            const right1 = firstHalf.graphemeLayoutBounds[2]
 
 
             if (left1 < x && x < right1) {
                 return firstHalf;
             }
             const secondHalf = this._getClosestCharacterInRange(x, midIndex, endIndex);
-            const left2  =  secondHalf.graphemeLayoutBounds[0]
-            const right2 =  secondHalf.graphemeLayoutBounds[2]
+            const left2 = secondHalf.graphemeLayoutBounds[0]
+            const right2 = secondHalf.graphemeLayoutBounds[2]
             if (left2 < x && x < right2) {
                 return secondHalf;
             }
@@ -492,7 +504,7 @@ abstract class _CombinedFragment extends TextFragment {
         console.assert(!(range.start == range.end));
 
         const box = this.toTextBox(range.start, range.end);
-        return { graphemeLayoutBounds: box.rect, graphemeClusterTextRange: range, dir: box.dir, isEllipsis: false};
+        return { graphemeLayoutBounds: box.rect, graphemeClusterTextRange: range, dir: box.dir, isEllipsis: false };
     }
 
     /// Returns the GlyphInfo of the character in the fragment that is closest to
@@ -664,9 +676,9 @@ export class LayoutFragmenter extends TextFragmenter {
         const spanIterator = this.paragraphSpans[Symbol.iterator]();
         let spanNext = spanIterator.next();
 
-        let currentLineBreak = lineBreakNext.value;
-        let currentBidi = bidiNext.value;
-        let currentSpan = spanNext.value;
+        let currentLineBreak: LineBreakFragment = lineBreakNext.value;
+        let currentBidi: BidiFragment = bidiNext.value;
+        let currentSpan: ParagraphSpan = spanNext.value;
 
         while (true) {
             const fragmentEnd = Math.min(
