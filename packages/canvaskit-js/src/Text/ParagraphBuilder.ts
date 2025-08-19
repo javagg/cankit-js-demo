@@ -42,6 +42,7 @@ import { baselineRatioHack, measureSubstring, RulerHost } from "./measurement";
 import { LineMetricsJS } from "./paragraph";
 import { LineBreakType } from "./line_breaker";
 import { FragmentFlow } from "./text_direction";
+import { TextHeightRuler, TextHeightStyle } from "./ruler";
 
 // export const ParagraphBuilder: CKParagraphBuilder = {
 //     addPlaceholder: function (width?: number, height?: number, alignment?: PlaceholderAlignment, baseline?: TextBaseline, offset?: number): void {
@@ -2103,6 +2104,7 @@ class LineBuilder {
     const placeholder: PlaceholderSpan = fragment.span as PlaceholderSpan;
 
     let ascent: number, descent: number;
+    let textMidPoint: number, placeholderMidPoint: number, diff: number;
     switch (placeholder.alignment) {
       case PlaceholderAlignmentEnums.Top:
         // The placeholder is aligned to the top of text, which means it has the
@@ -2120,9 +2122,9 @@ class LineBuilder {
         break;
 
       case PlaceholderAlignmentEnums.Middle:
-        const textMidPoint = this.height / 2
-        const placeholderMidPoint = placeholder.height / 2
-        const diff = placeholderMidPoint - textMidPoint
+        textMidPoint = this.height / 2
+        placeholderMidPoint = placeholder.height / 2
+        diff = placeholderMidPoint - textMidPoint
         ascent = this.ascent + diff;
         descent = this.descent + diff;
         break;
@@ -2439,7 +2441,7 @@ export class Spanometer {
     // Update the height ruler.
     // If the ruler doesn't exist in the cache, create a new one and cache it.
     const heightStyle: TextHeightStyle = span.style.heightStyle;
-    let ruler: TextHeightRuler | undefined = Spanometer._rulers.get(heightStyle);
+    let ruler = Spanometer._rulers.get(heightStyle);
     if (ruler === undefined) {
       ruler = new TextHeightRuler(heightStyle, Spanometer._rulerHost);
       Spanometer._rulers.set(heightStyle, ruler);

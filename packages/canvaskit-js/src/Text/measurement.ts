@@ -8,23 +8,22 @@ export const baselineRatioHack = 1.1662499904632568;
 
 /// Hosts ruler DOM elements in a hidden container under [DomManager.renderingHost].
 export class RulerHost {
-    /**
-     * 托管用于测量文本的测量器缓存。
-     *
-     * 此元素纯粹出于组织目的而存在。否则，测量器将附加到 `<body>` 元素上，
-     * 从而污染元素树并使其难以导航。它不提供任何功能目的。
-     */
+    /// Hosts a cache of rulers that measure text.
+    ///
+    /// This element exists purely for organizational purposes. Otherwise the
+    /// rulers would be attached to the `<body>` element polluting the element
+    /// tree and making it hard to navigate. It does not serve any functional
+    /// purpose.
     private _rulerHost: HTMLElement;
-
-    /**
-     * 标记此 RulerHost 是否已被释放。
-     */
+    
+    renderingHost: HTMLElement;
+    
     private _isDisposed: boolean = false;
 
     constructor() {
         this._rulerHost = document.createElement('flt-ruler-host');
 
-        const style: CSSStyleDeclaration = (this._rulerHost as HTMLElement).style; // 安全转换以访问 style
+        const style = (this._rulerHost as HTMLElement).style;
         style.position = 'fixed';
         style.visibility = 'hidden';
         style.overflow = 'hidden';
@@ -32,6 +31,11 @@ export class RulerHost {
         style.left = '0';
         style.width = '0';
         style.height = '0';
+
+        this.renderingHost = document.querySelector('flt-rendering-host') as HTMLElement;
+        if (this.renderingHost) {
+            this.renderingHost.appendChild(this._rulerHost);
+        }
 
         // TODO(mdebbar): 可能存在多个视图和多个渲染宿主。
         //                https://github.com/flutter/flutter/issues/137344
@@ -53,31 +57,27 @@ export class RulerHost {
         // registerHotRestartListener(() => this.dispose());
     }
 
-    /**
-     * 释放此 [RulerHost] 使用的资源。
-     *
-     * 调用此方法后，此对象将不再可用。
-     */
+    /// Releases the resources used by this [RulerHost].
+    ///
+    /// After this is called, this object is no longer usable.
     dispose(): void {
-        // 防止重复 dispose
-        if (!this._isDisposed) {
-            this._rulerHost.remove(); // 从 DOM 中移除
-            this._isDisposed = true;
-        }
+       this._rulerHost.remove(); 
+        // if (!this._isDisposed) {
+        //     this._rulerHost.remove(); // 从 DOM 中移除
+        //     this._isDisposed = true;
+        // }
     }
 
-    /**
-     * 将用于测量文本的元素添加为 [_rulerHost] 的子元素。
-     * @param element 要添加的 HTMLElement。
-     */
+    /// Adds an element used for measuring text as a child of [_rulerHost].
     addElement(element: HTMLElement): void {
-        // 检查是否已被 dispose
-        if (this._isDisposed) {
-            throw new Error('RulerHost has been disposed and is no longer usable.');
-        }
+        // // 检查是否已被 dispose
+        // if (this._isDisposed) {
+        //     throw new Error('RulerHost has been disposed and is no longer usable.');
+        // }
         this._rulerHost.appendChild(element);
     }
 }
+
 // These global variables are used to memoize calls to [measureSubstring]. They
 // are used to remember the last arguments passed to it, and the last return
 // value.
