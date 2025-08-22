@@ -645,7 +645,7 @@ export class ParagraphJS
 
   constructor(
     readonly spans: ParagraphSpan[],
-    readonly paragraphStyle: ParagraphStyle,
+    readonly paragraphStyle: ParagraphStyleJS,
     readonly plainText: string
   ) {
     super("Paragraph");
@@ -2005,7 +2005,7 @@ class LineBuilder {
   /// The horizontal offset necessary for the line to be correctly aligned.
   get alignOffset(): number {
     const emptySpace = this.maxWidth - this.width;
-    const textAlign = this.paragraph.paragraphStyle.textAlign // effectiveTextAlign;
+    const textAlign = this.paragraph.paragraphStyle.effectiveTextAlign;
     const paragraphDirection = this._paragraphDirection;
 
     switch (textAlign) {

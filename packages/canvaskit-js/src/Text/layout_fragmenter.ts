@@ -475,27 +475,37 @@ abstract class _CombinedFragment extends TextFragment {
         const _left = fullBox.rect[0]
         const _right = fullBox.rect[2]
 
+        // The toTextBox call is potentially expensive so we'll try reducing the
+        // search steps with a binary search.
+        //
+        // x ∈ (left, right),
         if (_left < x && x < _right) {
             const midIndex = Math.floor((startIndex + endIndex) / 2);
+            // endIndex >= startIndex + 2, so midIndex >= start + 1
+
             const firstHalf = this._getClosestCharacterInRange(x, startIndex, midIndex);
             const left1 = firstHalf.graphemeLayoutBounds[0]
             const right1 = firstHalf.graphemeLayoutBounds[2]
 
-
             if (left1 < x && x < right1) {
                 return firstHalf;
             }
+            // startIndex <= endIndex - 2, so midIndex <= endIndex - 1
             const secondHalf = this._getClosestCharacterInRange(x, midIndex, endIndex);
             const left2 = secondHalf.graphemeLayoutBounds[0]
             const right2 = secondHalf.graphemeLayoutBounds[2]
             if (left2 < x && x < right2) {
                 return secondHalf;
             }
+
+            // Neither box clips the given x. This is supposed to be rare.
             const distanceToFirst = Math.abs(x - Math.max(Math.min(x, right1), left1));
             const distanceToSecond = Math.abs(x - Math.max(Math.min(x, right2), left2));
             return distanceToFirst > distanceToSecond ? firstHalf : secondHalf;
         }
 
+        // x ∉ (left, right), it's either the first character or the last, since
+        // there can only be one writing direction in the fragment.
         const range = (fullBox.dir === TextDirectionEnums.LTR && x <= _left) ||
             (fullBox.dir === TextDirectionEnums.LTR && x > _left)
             ? { start: graphemeStartIndices[startIndex], end: graphemeStartIndices[startIndex + 1] }

@@ -11,7 +11,7 @@ const paraStyle = new CanvasKit.ParagraphStyle({
     fontFamilies: ["sans-serif"],
     fontSize: 64,
   },
-  //textAlign: CanvasKit.TextAlign.Left,
+  textAlign: CanvasKit.TextAlign.Left,
   maxLines: 7,
   ellipsis: "...",
   heightMultiplier: 1.6,

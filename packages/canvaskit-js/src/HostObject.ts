@@ -8,7 +8,7 @@ export abstract class HostObject<T extends string>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   implements EmbindObject<any>
 {
-  constructor(public readonly __type__: T) {}
+  constructor(public readonly _type: T) {}
 
   // TODO: remove when upgrading canvaskit
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

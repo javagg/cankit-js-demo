@@ -16,7 +16,7 @@ import type {
 import { HostObject } from "../HostObject";
 import { TextHeightStyle } from "./ruler";
 import { StyleManager } from "./style_manager";
-
+import { TextAlign as TextAlignEnums, TextDirection as TextDirectionEnums } from "../Core";
 // export function TextStyle(style: CKTextStyle) {
 //   return style;
 // }
@@ -98,7 +98,7 @@ export class TextStyleJS
   private static readonly _testFonts: string[] = ['FlutterTest', 'Ahem'];
 
   get effectiveFontFamily(): string {
-    let result = this.fontFamilies[0] || StyleManager.defaultFontFamily;
+    const result = this.fontFamilies[0] || StyleManager.defaultFontFamily;
     // 只在开发模式下执行断言逻辑（模拟 Dart 的 assert(() { ... }()) 行为）
     // (() => {
     //   if (
@@ -142,12 +142,41 @@ export class ParagraphStyleJS
   heightMultiplier?: number;
   maxLines?: number;
   replaceTabCharacters?: boolean;
-  strutStyle?: CKStrutStyle;
+  strutStyle?: StrutStyleJS;
   textAlign?: TextAlign;
   textDirection?: TextDirection;
   textHeightBehavior?: TextHeightBehavior;
   textStyle?: CKTextStyle;
   applyRoundingHack?: boolean;
+
+  // only in ts
+  height?: number;
+
+  get effectiveTextAlign() {
+    return this.textAlign ?? TextAlignEnums.Start;
+  }
+
+  get effectiveTextDirection() {
+    return this.textDirection ?? TextDirectionEnums.LTR;
+  }
+
+  get lineHeight() {
+       // TODO(mdebbar): Implement proper support for strut styles.
+    // https://github.com/flutter/flutter/issues/32243
+    const strutStyle = this.strutStyle;
+    const strutHeight = strutStyle?.height;
+    if (strutStyle == null || strutHeight == null || strutHeight == 0) {
+      // When there's no strut height, always use paragraph style height.
+      return this.height;
+    }
+    if (strutStyle.forceStrutHeight ?? false) {
+      // When strut height is forced, ignore paragraph style height.
+      return strutHeight;
+    }
+    // In this case, strut height acts as a minimum height for all parts of the
+    // paragraph. So we take the max of strut height and paragraph style height.
+    return Math.max(strutHeight, this.height ?? 0.0); 
+  }
 }
 
 
@@ -165,4 +194,7 @@ export class StrutStyleJS
   halfLeading?: boolean;
   leading?: number;
   forceStrutHeight?: boolean;
+
+  // only in ts
+  height?: number
 }
